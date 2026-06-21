@@ -1,0 +1,16 @@
+{
+  "name": "agente-de-ia",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev:api": "npm -w apps/api run dev",
+    "dev:worker": "npm -w apps/worker run dev",
+    "dev:dashboard": "npm -w apps/dashboard run dev",
+    "test": "npm --workspaces run test --if-present",
+    "build": "npm --workspaces run build --if-present",
+    "typecheck": "npm --workspaces run typecheck --if-present"
+  },
+  "engines": { "node": ">=20.0.0" }
+}
