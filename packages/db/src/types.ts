@@ -83,68 +83,56 @@ export type JobFailureInsert = {
   attempts: number
 }
 
-// Explicit Insert/Update types for Database (avoids Omit/Partial in generic constraints)
-type InstanceInsert = { name: string; evolution_instance_name: string; webhook_secret: string; status: InstanceStatus }
-type InstanceUpdate = { name?: string; evolution_instance_name?: string; webhook_secret?: string; status?: InstanceStatus }
-
-type AgentInsert = { instance_id: string; name: string; model: string; system_prompt: string; temperature: number; tools: string[]; is_active: boolean; business_hours?: BusinessHours | null; off_hours_message?: string | null; typing_delay_ms: number; daily_message_limit?: number | null }
-type AgentUpdate = { instance_id?: string; name?: string; model?: string; system_prompt?: string; temperature?: number; tools?: string[]; is_active?: boolean; business_hours?: BusinessHours | null; off_hours_message?: string | null; typing_delay_ms?: number; daily_message_limit?: number | null }
-
-type ContactInsert = { instance_id: string; phone: string; name?: string | null }
-type ContactUpdate = { instance_id?: string; phone?: string; name?: string | null }
-
-type ConversationInsert = { contact_id: string; instance_id: string; agent_id?: string | null; status: ConversationStatus; last_message_at?: string | null }
-type ConversationUpdate = { contact_id?: string; instance_id?: string; agent_id?: string | null; status?: ConversationStatus; last_message_at?: string | null }
-
-type MessageRow = { id: string; conversation_id: string; role: MessageRole; content: string; status: MessageStatus; error: string | null; evolution_message_id: string | null; created_at: string }
-type MessageInsertRow = { conversation_id: string; role: MessageRole; content: string; status?: MessageStatus; error?: string | null; evolution_message_id?: string | null }
-type MessageUpdate = { conversation_id?: string; role?: MessageRole; content?: string; status?: MessageStatus; error?: string | null; evolution_message_id?: string | null }
-
-type JobFailureInsertRow = { message_id: string; error: string; attempts: number }
-type JobFailureUpdate = { message_id?: string; error?: string; attempts?: number }
+type Relationship = {
+  foreignKeyName: string
+  columns: string[]
+  isOneToOne?: boolean
+  referencedRelation: string
+  referencedColumns: string[]
+}
 
 export interface Database {
   public: {
     Tables: {
       instances: {
-        Row: Instance
-        Insert: InstanceInsert
-        Update: InstanceUpdate
-        Relationships: []
+        Row: { [K in keyof Instance]: Instance[K] }
+        Insert: Omit<Instance, 'id' | 'created_at'>
+        Update: Partial<Omit<Instance, 'id' | 'created_at'>>
+        Relationships: Relationship[]
       }
       agents: {
-        Row: Agent
-        Insert: AgentInsert
-        Update: AgentUpdate
-        Relationships: []
+        Row: { [K in keyof Agent]: Agent[K] }
+        Insert: Omit<Agent, 'id' | 'created_at'>
+        Update: Partial<Omit<Agent, 'id' | 'created_at'>>
+        Relationships: Relationship[]
       }
       contacts: {
-        Row: Contact
-        Insert: ContactInsert
-        Update: ContactUpdate
-        Relationships: []
+        Row: { [K in keyof Contact]: Contact[K] }
+        Insert: Omit<Contact, 'id' | 'created_at'>
+        Update: Partial<Omit<Contact, 'id' | 'created_at'>>
+        Relationships: Relationship[]
       }
       conversations: {
-        Row: Conversation
-        Insert: ConversationInsert
-        Update: ConversationUpdate
-        Relationships: []
+        Row: { [K in keyof Conversation]: Conversation[K] }
+        Insert: { contact_id: string; instance_id: string; agent_id: string | null; status: ConversationStatus; last_message_at?: string | null }
+        Update: Partial<Omit<Conversation, 'id' | 'created_at'>>
+        Relationships: Relationship[]
       }
       messages: {
-        Row: MessageRow
-        Insert: MessageInsertRow
-        Update: MessageUpdate
-        Relationships: []
+        Row: { [K in keyof Message]: Message[K] }
+        Insert: { conversation_id: string; role: MessageRole; content: string; status?: MessageStatus; error?: string | null; evolution_message_id?: string | null }
+        Update: Partial<Omit<Message, 'id' | 'created_at'>>
+        Relationships: Relationship[]
       }
       job_failures: {
-        Row: JobFailure
-        Insert: JobFailureInsertRow
-        Update: JobFailureUpdate
-        Relationships: []
+        Row: { [K in keyof JobFailure]: JobFailure[K] }
+        Insert: { message_id: string; error: string; attempts: number; failed_at?: string }
+        Update: Partial<Omit<JobFailure, 'id'>>
+        Relationships: Relationship[]
       }
     }
-    Views: { [_ in never]: never }
-    Functions: { [_ in never]: never }
-    Enums: { [_ in never]: never }
+    Views: { [K in never]: never }
+    Functions: { [K in never]: never }
+    Enums: { [K in never]: never }
   }
 }
