@@ -1,0 +1,28 @@
+{
+  "name": "@agente/llm",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@agente/db": "*",
+    "ai": "^3.2.0",
+    "@ai-sdk/openai": "^0.0.36",
+    "@ai-sdk/anthropic": "^0.0.23",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
