@@ -83,42 +83,68 @@ export type JobFailureInsert = {
   attempts: number
 }
 
+// Explicit Insert/Update types for Database (avoids Omit/Partial in generic constraints)
+type InstanceInsert = { name: string; evolution_instance_name: string; webhook_secret: string; status: InstanceStatus }
+type InstanceUpdate = { name?: string; evolution_instance_name?: string; webhook_secret?: string; status?: InstanceStatus }
+
+type AgentInsert = { instance_id: string; name: string; model: string; system_prompt: string; temperature: number; tools: string[]; is_active: boolean; business_hours?: BusinessHours | null; off_hours_message?: string | null; typing_delay_ms: number; daily_message_limit?: number | null }
+type AgentUpdate = { instance_id?: string; name?: string; model?: string; system_prompt?: string; temperature?: number; tools?: string[]; is_active?: boolean; business_hours?: BusinessHours | null; off_hours_message?: string | null; typing_delay_ms?: number; daily_message_limit?: number | null }
+
+type ContactInsert = { instance_id: string; phone: string; name?: string | null }
+type ContactUpdate = { instance_id?: string; phone?: string; name?: string | null }
+
+type ConversationInsert = { contact_id: string; instance_id: string; agent_id?: string | null; status: ConversationStatus; last_message_at?: string | null }
+type ConversationUpdate = { contact_id?: string; instance_id?: string; agent_id?: string | null; status?: ConversationStatus; last_message_at?: string | null }
+
+type MessageRow = { id: string; conversation_id: string; role: MessageRole; content: string; status: MessageStatus; error: string | null; evolution_message_id: string | null; created_at: string }
+type MessageInsertRow = { conversation_id: string; role: MessageRole; content: string; status?: MessageStatus; error?: string | null; evolution_message_id?: string | null }
+type MessageUpdate = { conversation_id?: string; role?: MessageRole; content?: string; status?: MessageStatus; error?: string | null; evolution_message_id?: string | null }
+
+type JobFailureInsertRow = { message_id: string; error: string; attempts: number }
+type JobFailureUpdate = { message_id?: string; error?: string; attempts?: number }
+
 export interface Database {
   public: {
     Tables: {
       instances: {
         Row: Instance
-        Insert: Omit<Instance, 'id' | 'created_at'>
-        Update: Partial<Omit<Instance, 'id' | 'created_at'>>
+        Insert: InstanceInsert
+        Update: InstanceUpdate
+        Relationships: []
       }
       agents: {
         Row: Agent
-        Insert: Omit<Agent, 'id' | 'created_at'>
-        Update: Partial<Omit<Agent, 'id' | 'created_at'>>
+        Insert: AgentInsert
+        Update: AgentUpdate
+        Relationships: []
       }
       contacts: {
         Row: Contact
-        Insert: Omit<Contact, 'id' | 'created_at'>
-        Update: Partial<Omit<Contact, 'id' | 'created_at'>>
+        Insert: ContactInsert
+        Update: ContactUpdate
+        Relationships: []
       }
       conversations: {
         Row: Conversation
-        Insert: Omit<Conversation, 'id' | 'created_at'>
-        Update: Partial<Omit<Conversation, 'id' | 'created_at'>>
+        Insert: ConversationInsert
+        Update: ConversationUpdate
+        Relationships: []
       }
       messages: {
-        Row: Message
-        Insert: Omit<Message, 'id' | 'created_at'>
-        Update: Partial<Omit<Message, 'id' | 'created_at'>>
+        Row: MessageRow
+        Insert: MessageInsertRow
+        Update: MessageUpdate
+        Relationships: []
       }
       job_failures: {
         Row: JobFailure
-        Insert: Omit<JobFailure, 'id'>
-        Update: Partial<Omit<JobFailure, 'id'>>
+        Insert: JobFailureInsertRow
+        Update: JobFailureUpdate
+        Relationships: []
       }
     }
-    Views: Record<string, never>
-    Functions: Record<string, never>
-    Enums: Record<string, never>
+    Views: { [_ in never]: never }
+    Functions: { [_ in never]: never }
+    Enums: { [_ in never]: never }
   }
 }
