@@ -1,0 +1,8 @@
+[build]
+builder = "nixpacks"
+buildCommand = "npm ci && npm run build -w packages/db -w packages/queue -w packages/evolution -w packages/llm && npm run build -w apps/worker"
+
+[deploy]
+startCommand = "node apps/worker/dist/index.js"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
