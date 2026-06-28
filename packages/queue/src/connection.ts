@@ -1,14 +1,16 @@
 import type { ConnectionOptions } from 'bullmq'
 
 export function createRedisConnection(url: string): ConnectionOptions {
-  // Parse redis://[user:pass@]host[:port]
-  const withoutScheme = url.replace(/^redis:\/\//, '')
-  const hostPart = withoutScheme.includes('@') ? withoutScheme.split('@')[1]! : withoutScheme
-  const [host, portStr] = hostPart.split(':')
-  return {
-    host: host ?? 'localhost',
-    port: portStr ? parseInt(portStr) : 6379,
+  const parsed = new URL(url)
+  const opts: ConnectionOptions = {
+    host: parsed.hostname,
+    port: parsed.port ? parseInt(parsed.port) : 6379,
+    username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+    password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+    tls: parsed.protocol === 'rediss:' ? {} : undefined,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
+    lazyConnect: false,
   }
+  return opts
 }

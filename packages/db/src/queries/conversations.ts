@@ -24,3 +24,14 @@ export async function getOrCreateConversation(
   if (error || !data) throw new Error(`getOrCreateConversation failed: ${error?.message}`)
   return data
 }
+
+export async function activateConversationAgent(
+  db: SupabaseClient<Database>,
+  conversationId: string,
+): Promise<void> {
+  const { error } = await db
+    .from('conversations')
+    .update({ agent_triggered: true })
+    .eq('id', conversationId)
+  if (error) throw new Error(`activateConversationAgent failed: ${error.message}`)
+}

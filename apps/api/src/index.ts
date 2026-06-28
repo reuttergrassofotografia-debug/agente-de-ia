@@ -15,4 +15,6 @@ await app.register(cors)
 
 registerWebhookRoute(app, { db, queue })
 
+app.get('/', async (_req, reply) => reply.send({ ok: true }))
+
 await app.listen({ port: env.PORT, host: '0.0.0.0' })

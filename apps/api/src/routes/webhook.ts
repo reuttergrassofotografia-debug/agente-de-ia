@@ -10,7 +10,6 @@ import {
   type Database,
 } from '@agente/db'
 import { enqueueMessage, type MessageJob } from '@agente/queue'
-import { extractMessageText } from '@agente/evolution'
 import { WebhookPayloadSchema } from '../schemas/webhook.js'
 
 interface WebhookDeps {
@@ -28,13 +27,16 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
 
     if (payload.data.key.fromMe) return reply.status(200).send({ ok: true, skipped: 'fromMe' })
 
-    const apikey = (request.headers['apikey'] as string | undefined)
+    const apikey = payload.apikey ?? (request.headers['apikey'] as string | undefined)
     const instance = await getInstanceByName(db, payload.instance)
     if (!apikey || !instance || apikey !== instance.webhook_secret) {
       return reply.status(401).send({ error: 'Unauthorized' })
     }
 
-    const text = extractMessageText(payload)
+    const msg = payload.data.message as Record<string, unknown> | undefined
+    const text = (msg?.['conversation'] as string | undefined)
+      ?? ((msg?.['extendedTextMessage'] as Record<string, unknown> | undefined)?.['text'] as string | undefined)
+      ?? null
     if (!text) return reply.status(200).send({ ok: true, skipped: 'non-text' })
 
     const agent = await getAgentByInstanceId(db, instance.id)
@@ -58,6 +60,7 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
       conversationId: conversation.id,
       evolutionInstanceName: payload.instance,
       contactPhone: phone,
+      conversationTriggered: conversation.agent_triggered,
     })
 
     return reply.status(200).send({ ok: true, jobEnqueued: true })

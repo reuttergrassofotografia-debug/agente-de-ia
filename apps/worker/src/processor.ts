@@ -1,4 +1,4 @@
-import type { Job } from 'bullmq'
+﻿import type { Job } from 'bullmq'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EvolutionClient } from '@agente/evolution'
 import {
@@ -6,6 +6,7 @@ import {
   getConversationMessages,
   createMessage,
   updateMessageStatus,
+  activateConversationAgent,
   type Database,
 } from '@agente/db'
 import { runAgent } from '@agente/llm'
@@ -17,8 +18,12 @@ interface ProcessorDeps {
   evolution: EvolutionClient
 }
 
+function stripAccents(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+}
+
 export async function processMessage(job: Job<MessageJob>, { db, evolution }: ProcessorDeps): Promise<void> {
-  const { instanceId, messageId, conversationId, evolutionInstanceName, contactPhone } = job.data
+  const { instanceId, messageId, conversationId, evolutionInstanceName, contactPhone, conversationTriggered } = job.data
 
   const agent = await getAgentByInstanceId(db, instanceId)
 
@@ -33,6 +38,19 @@ export async function processMessage(job: Job<MessageJob>, { db, evolution }: Pr
     }
     await updateMessageStatus(db, messageId, 'skipped')
     return
+  }
+
+  // Trigger phrase check: skip until trigger is detected (accent-insensitive)
+  if (agent.trigger_phrase && !conversationTriggered) {
+    const allMessages = await getConversationMessages(db, conversationId)
+    const currentMsg = allMessages.find((m) => m.id === messageId)
+    const text = currentMsg?.content ?? ''
+    const triggered = stripAccents(text).includes(stripAccents(agent.trigger_phrase))
+    if (!triggered) {
+      await updateMessageStatus(db, messageId, 'skipped')
+      return
+    }
+    await activateConversationAgent(db, conversationId)
   }
 
   await updateMessageStatus(db, messageId, 'processing')

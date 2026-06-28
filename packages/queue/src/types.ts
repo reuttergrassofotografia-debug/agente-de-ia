@@ -7,4 +7,5 @@ export interface MessageJob {
   conversationId: string
   evolutionInstanceName: string
   contactPhone: string
+  conversationTriggered: boolean
 }

@@ -29,6 +29,7 @@ export interface Agent {
   off_hours_message: string | null
   typing_delay_ms: number
   daily_message_limit: number | null
+  trigger_phrase: string | null
   created_at: string
 }
 
@@ -47,6 +48,7 @@ export interface Conversation {
   agent_id: string | null
   status: ConversationStatus
   last_message_at: string | null
+  agent_triggered: boolean
   created_at: string
 }
 
