@@ -2,8 +2,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy workspace manifests
-COPY package.json package-lock.json ./
+# Copy workspace manifests and root tsconfig
+COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/queue/package.json ./packages/queue/
 COPY packages/evolution/package.json ./packages/evolution/
