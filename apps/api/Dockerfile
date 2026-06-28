@@ -1,0 +1,52 @@
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy workspace manifests
+COPY package.json package-lock.json ./
+COPY packages/db/package.json ./packages/db/
+COPY packages/queue/package.json ./packages/queue/
+COPY packages/evolution/package.json ./packages/evolution/
+COPY packages/llm/package.json ./packages/llm/
+COPY apps/api/package.json ./apps/api/
+
+# Install all workspace deps
+RUN npm ci
+
+# Copy source
+COPY packages/ ./packages/
+COPY apps/api/ ./apps/api/
+
+# Build packages then app
+RUN npm run build -w packages/db
+RUN npm run build -w packages/queue
+RUN npm run build -w packages/evolution
+RUN npm run build -w packages/llm
+RUN npm run build -w apps/api
+
+# ----
+
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY package.json package-lock.json ./
+COPY packages/db/package.json ./packages/db/
+COPY packages/queue/package.json ./packages/queue/
+COPY packages/evolution/package.json ./packages/evolution/
+COPY packages/llm/package.json ./packages/llm/
+COPY apps/api/package.json ./apps/api/
+
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/packages/queue/dist ./packages/queue/dist
+COPY --from=builder /app/packages/evolution/dist ./packages/evolution/dist
+COPY --from=builder /app/packages/llm/dist ./packages/llm/dist
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
+
+EXPOSE 3000
+
+CMD ["node", "apps/api/dist/index.js"]
