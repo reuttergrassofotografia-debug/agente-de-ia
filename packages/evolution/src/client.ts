@@ -32,6 +32,21 @@ export class EvolutionClient {
     })
   }
 
+  async sendMedia(instanceName: string, to: string, mediaBase64: string, mimetype: string, caption = ''): Promise<void> {
+    const mediatype = mimetype.startsWith('image/') ? 'image' : mimetype.startsWith('video/') ? 'video' : 'document'
+    await this.request(`/message/sendMedia/${instanceName}`, {
+      method: 'POST',
+      body: JSON.stringify({ number: to, mediatype, mimetype, caption, media: mediaBase64 }),
+    })
+  }
+
+  async sendAudio(instanceName: string, to: string, audioBase64: string): Promise<void> {
+    await this.request(`/message/sendWhatsAppAudio/${instanceName}`, {
+      method: 'POST',
+      body: JSON.stringify({ number: to, audio: audioBase64, encoding: true }),
+    })
+  }
+
   async getQrCode(instanceName: string): Promise<{ base64: string; status: string }> {
     const data = await this.request<QrCodeResponse>(`/instance/connect/${instanceName}`)
     return { base64: data.base64, status: data.status }

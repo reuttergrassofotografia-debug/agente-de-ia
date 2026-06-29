@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EvolutionClient } from '@agente/evolution'
 import {
   getAgentByInstanceId,
+  getConversation,
   getConversationMessages,
   createMessage,
   updateMessageStatus,
@@ -24,6 +25,12 @@ function stripAccents(s: string): string {
 
 export async function processMessage(job: Job<MessageJob>, { db, evolution }: ProcessorDeps): Promise<void> {
   const { instanceId, messageId, conversationId, evolutionInstanceName, contactPhone, conversationTriggered } = job.data
+
+  const conversation = await getConversation(db, conversationId)
+  if (conversation?.status === 'paused') {
+    await updateMessageStatus(db, messageId, 'skipped')
+    return
+  }
 
   const agent = await getAgentByInstanceId(db, instanceId)
 

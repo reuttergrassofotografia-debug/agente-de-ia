@@ -1,7 +1,8 @@
 export type InstanceStatus = 'connected' | 'disconnected' | 'qr_code'
 export type MessageStatus = 'pending' | 'processing' | 'delivered' | 'failed' | 'skipped'
 export type MessageRole = 'user' | 'assistant' | 'tool'
-export type ConversationStatus = 'active' | 'closed'
+export type ConversationStatus = 'active' | 'closed' | 'paused'
+export type ScheduledMessageStatus = 'pending' | 'sent' | 'failed'
 
 export type BusinessHours = {
   [day in 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun']?: [string, string]
@@ -85,6 +86,28 @@ export type JobFailureInsert = {
   attempts: number
 }
 
+export interface ScheduledMessage {
+  id: string
+  conversation_id: string
+  content: string
+  media_base64: string | null
+  media_type: 'text' | 'image' | 'audio'
+  mimetype: string | null
+  scheduled_at: string
+  status: ScheduledMessageStatus
+  error: string | null
+  created_at: string
+}
+
+export type ScheduledMessageInsert = {
+  conversation_id: string
+  content: string
+  media_base64?: string | null
+  media_type?: 'text' | 'image' | 'audio'
+  mimetype?: string | null
+  scheduled_at: string
+}
+
 type Relationship = {
   foreignKeyName: string
   columns: string[]
@@ -130,6 +153,12 @@ export interface Database {
         Row: { [K in keyof JobFailure]: JobFailure[K] }
         Insert: { message_id: string; error: string; attempts: number; failed_at?: string }
         Update: Partial<Omit<JobFailure, 'id'>>
+        Relationships: Relationship[]
+      }
+      scheduled_messages: {
+        Row: { [K in keyof ScheduledMessage]: ScheduledMessage[K] }
+        Insert: ScheduledMessageInsert
+        Update: Partial<Omit<ScheduledMessage, 'id' | 'created_at'>>
         Relationships: Relationship[]
       }
     }
