@@ -39,6 +39,7 @@ export interface Contact {
   instance_id: string
   phone: string
   name: string | null
+  profile_picture_url: string | null
   created_at: string
 }
 

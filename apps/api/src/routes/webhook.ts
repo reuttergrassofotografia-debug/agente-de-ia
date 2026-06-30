@@ -30,6 +30,11 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
       return reply.status(401).send({ error: 'Unauthorized' })
     }
 
+    // Skip group messages — only handle direct contact messages
+    if (payload.data.key.remoteJid.endsWith('@g.us')) {
+      return reply.status(200).send({ ok: true, skipped: 'group' })
+    }
+
     const msg = payload.data.message as Record<string, unknown> | undefined
     const text = (msg?.['conversation'] as string | undefined)
       ?? ((msg?.['extendedTextMessage'] as Record<string, unknown> | undefined)?.['text'] as string | undefined)
@@ -42,6 +47,25 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     const phone = payload.data.key.remoteJid.split('@')[0] ?? payload.data.key.remoteJid
 
     const contact = await getOrCreateContact(db, instance.id, phone, payload.data.pushName)
+
+    // Fetch WhatsApp profile picture once (when not yet stored)
+    if (!contact.profile_picture_url) {
+      try {
+        const evoUrl = process.env['EVOLUTION_API_URL']!
+        const evoKey = process.env['EVOLUTION_API_KEY']!
+        const r = await fetch(
+          `${evoUrl}/chat/fetchProfilePictureUrl/${payload.instance}?number=${phone}`,
+          { headers: { apikey: evoKey } },
+        )
+        if (r.ok) {
+          const pic = await r.json() as { profilePictureUrl?: string }
+          if (pic.profilePictureUrl) {
+            await db.from('contacts').update({ profile_picture_url: pic.profilePictureUrl }).eq('id', contact.id)
+          }
+        }
+      } catch { /* profile picture is optional */ }
+    }
+
     const conversation = await getOrCreateConversation(db, contact.id, instance.id, agent.id)
 
     if (payload.data.key.fromMe) {
