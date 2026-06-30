@@ -6,7 +6,6 @@ import {
   getAgentByInstanceId,
   getOrCreateContact,
   getOrCreateConversation,
-  createMessage,
   type Database,
 } from '@agente/db'
 import { enqueueMessage, type MessageJob } from '@agente/queue'
@@ -42,37 +41,38 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
 
     const phone = payload.data.key.remoteJid.split('@')[0] ?? payload.data.key.remoteJid
 
+    const contact = await getOrCreateContact(db, instance.id, phone, payload.data.pushName)
+    const conversation = await getOrCreateConversation(db, contact.id, instance.id, agent.id)
+
     if (payload.data.key.fromMe) {
       // Message sent from the business WhatsApp (phone or CRM).
-      // If the CRM already saved it (with this evolution_message_id), skip to avoid duplicate.
-      const evolId = payload.data.key.id
-      const { data: existing } = await db
-        .from('messages')
-        .select('id')
-        .eq('evolution_message_id', evolId)
-        .maybeSingle()
-      if (existing) return reply.status(200).send({ ok: true, skipped: 'already-saved' })
-
-      const contact = await getOrCreateContact(db, instance.id, phone, payload.data.pushName)
-      const conversation = await getOrCreateConversation(db, contact.id, instance.id, agent.id)
-      await createMessage(db, {
+      // Use upsert to silently ignore duplicates (Evolution API fires webhooks twice sometimes,
+      // and the CRM already saves with the evolution_message_id returned by the API).
+      await db.from('messages').upsert({
         conversation_id: conversation.id,
         role: 'assistant',
         content: text,
-        evolution_message_id: evolId,
+        evolution_message_id: payload.data.key.id,
         status: 'delivered',
-      })
+      }, { onConflict: 'evolution_message_id', ignoreDuplicates: true })
       return reply.status(200).send({ ok: true, fromMe: true })
     }
 
-    const contact = await getOrCreateContact(db, instance.id, phone, payload.data.pushName)
-    const conversation = await getOrCreateConversation(db, contact.id, instance.id, agent.id)
-    const message = await createMessage(db, {
+    // Use upsert to handle duplicate webhook deliveries from Evolution API
+    const { data: upserted } = await db.from('messages').upsert({
       conversation_id: conversation.id,
       role: 'user',
       content: text,
       evolution_message_id: payload.data.key.id,
-    })
+      status: 'pending',
+    }, { onConflict: 'evolution_message_id', ignoreDuplicates: true })
+      .select('id')
+      .maybeSingle()
+
+    // If ignoreDuplicates skipped the insert (message already exists), don't re-enqueue
+    if (!upserted) return reply.status(200).send({ ok: true, skipped: 'duplicate' })
+
+    const message = upserted
 
     await enqueueMessage(queue, {
       instanceId: instance.id,
