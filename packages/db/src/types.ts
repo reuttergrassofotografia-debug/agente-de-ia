@@ -134,7 +134,7 @@ export interface Database {
       }
       contacts: {
         Row: { [K in keyof Contact]: Contact[K] }
-        Insert: Omit<Contact, 'id' | 'created_at'>
+        Insert: Omit<Contact, 'id' | 'created_at' | 'profile_picture_url'> & { profile_picture_url?: string | null }
         Update: Partial<Omit<Contact, 'id' | 'created_at'>>
         Relationships: Relationship[]
       }
