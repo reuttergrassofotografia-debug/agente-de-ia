@@ -25,8 +25,6 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     }
     const payload = parseResult.data
 
-    if (payload.data.key.fromMe) return reply.status(200).send({ ok: true, skipped: 'fromMe' })
-
     const apikey = payload.apikey ?? (request.headers['apikey'] as string | undefined)
     const instance = await getInstanceByName(db, payload.instance)
     if (!apikey || !instance || apikey !== instance.webhook_secret) {
@@ -43,6 +41,29 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     if (!agent) return reply.status(200).send({ ok: true, skipped: 'no-agent' })
 
     const phone = payload.data.key.remoteJid.split('@')[0] ?? payload.data.key.remoteJid
+
+    if (payload.data.key.fromMe) {
+      // Message sent from the business WhatsApp (phone or CRM).
+      // If the CRM already saved it (with this evolution_message_id), skip to avoid duplicate.
+      const evolId = payload.data.key.id
+      const { data: existing } = await db
+        .from('messages')
+        .select('id')
+        .eq('evolution_message_id', evolId)
+        .maybeSingle()
+      if (existing) return reply.status(200).send({ ok: true, skipped: 'already-saved' })
+
+      const contact = await getOrCreateContact(db, instance.id, phone, payload.data.pushName)
+      const conversation = await getOrCreateConversation(db, contact.id, instance.id, agent.id)
+      await createMessage(db, {
+        conversation_id: conversation.id,
+        role: 'assistant',
+        content: text,
+        evolution_message_id: evolId,
+        status: 'delivered',
+      })
+      return reply.status(200).send({ ok: true, fromMe: true })
+    }
 
     const contact = await getOrCreateContact(db, instance.id, phone, payload.data.pushName)
     const conversation = await getOrCreateConversation(db, contact.id, instance.id, agent.id)
