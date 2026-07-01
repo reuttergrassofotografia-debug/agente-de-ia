@@ -16,8 +16,9 @@ export async function getOrCreateContact(
     .maybeSingle()
 
   if (existing) {
-    // Only update name if the contact has no name yet and we have one
-    if (name && !existing.name) {
+    // Always update name when caller has one — name is only passed for fromMe:false messages
+    // so it is always the real contact display name, never the business owner's name
+    if (name && name !== existing.name) {
       const { data: updated } = await db
         .from('contacts')
         .update({ name })
