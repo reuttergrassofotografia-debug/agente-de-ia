@@ -29,10 +29,13 @@ export async function getOrCreateContact(
     return existing
   }
 
-  // Create new contact
+  // Create new contact — upsert handles concurrent duplicate webhooks atomically
   const { data, error } = await db
     .from('contacts')
-    .insert({ instance_id: instanceId, phone, name: name ?? null })
+    .upsert(
+      { instance_id: instanceId, phone, name: name ?? null },
+      { onConflict: 'instance_id,phone', ignoreDuplicates: false },
+    )
     .select('*')
     .single()
 
