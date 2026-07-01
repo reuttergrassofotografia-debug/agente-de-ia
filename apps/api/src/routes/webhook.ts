@@ -46,7 +46,9 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
 
     const phone = payload.data.key.remoteJid.split('@')[0] ?? payload.data.key.remoteJid
 
-    const contact = await getOrCreateContact(db, instance.id, phone, payload.data.pushName)
+    // For fromMe messages, pushName is the user's own WhatsApp name — never use it as the contact name
+    const contactName = payload.data.key.fromMe ? undefined : payload.data.pushName
+    const contact = await getOrCreateContact(db, instance.id, phone, contactName)
 
     // Fetch WhatsApp profile picture once (when not yet stored)
     if (!contact.profile_picture_url) {
