@@ -16,6 +16,47 @@ interface WebhookDeps {
   queue: Queue<MessageJob>
 }
 
+function extractContent(msg: Record<string, unknown> | undefined): { content: string; isText: boolean } | null {
+  if (!msg) return null
+
+  // Text messages
+  const text = (msg['conversation'] as string | undefined)
+    ?? ((msg['extendedTextMessage'] as Record<string, unknown> | undefined)?.['text'] as string | undefined)
+  if (text) return { content: text, isText: true }
+
+  // Audio / PTT (voice notes)
+  if (msg['audioMessage'] ?? msg['pttMessage']) return { content: '[Áudio]', isText: false }
+
+  // Image
+  const imageMsg = msg['imageMessage'] as Record<string, unknown> | undefined
+  if (imageMsg) {
+    const caption = imageMsg['caption'] as string | undefined
+    return { content: caption ? `[Imagem] ${caption}` : '[Imagem]', isText: false }
+  }
+
+  // Video
+  const videoMsg = msg['videoMessage'] as Record<string, unknown> | undefined
+  if (videoMsg) {
+    const caption = videoMsg['caption'] as string | undefined
+    return { content: caption ? `[Vídeo] ${caption}` : '[Vídeo]', isText: false }
+  }
+
+  // Document
+  const docMsg = msg['documentMessage'] as Record<string, unknown> | undefined
+  if (docMsg) {
+    const fileName = docMsg['fileName'] as string | undefined
+    return { content: fileName ? `[Documento] ${fileName}` : '[Documento]', isText: false }
+  }
+
+  // Sticker
+  if (msg['stickerMessage']) return { content: '[Sticker]', isText: false }
+
+  // Reactions (just acknowledge, don't save)
+  if (msg['reactionMessage']) return null
+
+  return null
+}
+
 export function registerWebhookRoute(app: FastifyInstance, { db, queue }: WebhookDeps): void {
   app.post('/webhook', async (request, reply) => {
     const parseResult = WebhookPayloadSchema.safeParse(request.body)
@@ -36,10 +77,10 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     }
 
     const msg = payload.data.message as Record<string, unknown> | undefined
-    const text = (msg?.['conversation'] as string | undefined)
-      ?? ((msg?.['extendedTextMessage'] as Record<string, unknown> | undefined)?.['text'] as string | undefined)
-      ?? null
-    if (!text) return reply.status(200).send({ ok: true, skipped: 'non-text' })
+    const extracted = extractContent(msg)
+    if (!extracted) return reply.status(200).send({ ok: true, skipped: 'unsupported-type' })
+
+    const { content, isText } = extracted
 
     const agent = await getAgentByInstanceId(db, instance.id)
     if (!agent) return reply.status(200).send({ ok: true, skipped: 'no-agent' })
@@ -77,7 +118,7 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
       await db.from('messages').upsert({
         conversation_id: conversation.id,
         role: 'assistant',
-        content: text,
+        content,
         evolution_message_id: payload.data.key.id,
         status: 'delivered',
       }, { onConflict: 'evolution_message_id', ignoreDuplicates: true })
@@ -89,7 +130,7 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     const { data: upserted } = await db.from('messages').upsert({
       conversation_id: conversation.id,
       role: 'user',
-      content: text,
+      content,
       evolution_message_id: payload.data.key.id,
       status: 'pending',
     }, { onConflict: 'evolution_message_id', ignoreDuplicates: true })
@@ -99,13 +140,15 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     // If ignoreDuplicates skipped the insert (message already exists), don't re-enqueue
     if (!upserted) return reply.status(200).send({ ok: true, skipped: 'duplicate' })
 
-    const message = upserted
     await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
+
+    // Only enqueue text messages for LLM processing — agent can't process audio/images
+    if (!isText) return reply.status(200).send({ ok: true, mediaSaved: true })
 
     await enqueueMessage(queue, {
       instanceId: instance.id,
       contactId: contact.id,
-      messageId: message.id,
+      messageId: upserted.id,
       conversationId: conversation.id,
       evolutionInstanceName: payload.instance,
       contactPhone: phone,
