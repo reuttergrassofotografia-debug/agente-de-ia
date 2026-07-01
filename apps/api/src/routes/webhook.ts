@@ -79,6 +79,7 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
         evolution_message_id: payload.data.key.id,
         status: 'delivered',
       }, { onConflict: 'evolution_message_id', ignoreDuplicates: true })
+      await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
       return reply.status(200).send({ ok: true, fromMe: true })
     }
 
@@ -97,6 +98,7 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     if (!upserted) return reply.status(200).send({ ok: true, skipped: 'duplicate' })
 
     const message = upserted
+    await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
 
     await enqueueMessage(queue, {
       instanceId: instance.id,
