@@ -29,16 +29,26 @@ export async function getOrCreateContact(
     return existing
   }
 
-  // Create new contact — upsert handles concurrent duplicate webhooks atomically
-  const { data, error } = await db
+  // ignoreDuplicates:true prevents a concurrent insert from overwriting the name set by a racing webhook
+  const { data } = await db
     .from('contacts')
     .upsert(
       { instance_id: instanceId, phone, name: name ?? null },
-      { onConflict: 'instance_id,phone', ignoreDuplicates: false },
+      { onConflict: 'instance_id,phone', ignoreDuplicates: true },
     )
     .select('*')
     .single()
 
-  if (error || !data) throw new Error(`getOrCreateContact failed: ${error?.message}`)
-  return data
+  if (data) return data
+
+  // Row was ignored because a concurrent insert won the race — fetch the existing row
+  const { data: refetched, error } = await db
+    .from('contacts')
+    .select('*')
+    .eq('instance_id', instanceId)
+    .eq('phone', phone)
+    .single()
+
+  if (error || !refetched) throw new Error(`getOrCreateContact failed: ${error?.message}`)
+  return refetched
 }

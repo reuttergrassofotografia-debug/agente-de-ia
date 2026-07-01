@@ -24,8 +24,8 @@ function extractContent(msg: Record<string, unknown> | undefined): { content: st
     ?? ((msg['extendedTextMessage'] as Record<string, unknown> | undefined)?.['text'] as string | undefined)
   if (text) return { content: text, isText: true }
 
-  // Audio / PTT (voice notes)
-  if (msg['audioMessage'] ?? msg['pttMessage']) return { content: '[Áudio]', isText: false }
+  // Audio / PTT (voice notes) — use || so explicit null falls through to check pttMessage
+  if (msg['audioMessage'] || msg['pttMessage']) return { content: '[Áudio]', isText: false }
 
   // Image
   const imageMsg = msg['imageMessage'] as Record<string, unknown> | undefined
