@@ -18,8 +18,10 @@ export async function getOrCreateContact(
 
   if (existing) {
     // Always update name when caller has one — name is only passed for fromMe:false messages
-    // so it is always the real contact display name, never the business owner's name
-    if (name && name !== existing.name) {
+    // so it is always the real contact display name, never the business owner's name.
+    // Skip when the CRM user has manually set a name — a manual edit must stick even
+    // after a new message arrives with a different pushName.
+    if (name && name !== existing.name && !existing.name_edited_by_user) {
       const { data: updated } = await db
         .from('contacts')
         .update({ name })

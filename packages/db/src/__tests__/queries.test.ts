@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database, Instance, Agent, Message } from '../types.js'
+import type { Database, Instance, Agent, Message, Contact } from '../types.js'
 
 function makeChain(overrides: Record<string, unknown> = {}) {
   const chain: Record<string, unknown> = {
@@ -100,5 +100,46 @@ describe('updateMessageStatus', () => {
     }
     await updateMessageStatus(makeDb(chain), 'msg-1', 'failed', 'LLM timeout')
     expect(chain.update).toHaveBeenCalledWith({ status: 'failed', error: 'LLM timeout' })
+  })
+})
+
+describe('getOrCreateContact', () => {
+  it('does not overwrite name when name_edited_by_user is true', async () => {
+    const { getOrCreateContact } = await import('../queries/contacts.js')
+    const existing: Contact = {
+      id: 'contact-1', instance_id: 'inst-1', phone: '5511999998888',
+      name: 'Nome Editado Manualmente', profile_picture_url: null, is_group: false,
+      notes: null, name_edited_by_user: true, created_at: '2026-01-01T00:00:00Z',
+    }
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: existing, error: null }),
+      update: vi.fn().mockReturnThis(),
+      single: vi.fn(),
+    }
+    const result = await getOrCreateContact(makeDb(chain), 'inst-1', '5511999998888', 'PushName Novo')
+    expect(result).toEqual(existing)
+    expect(chain.update).not.toHaveBeenCalled()
+  })
+
+  it('overwrites name from pushName when name_edited_by_user is false', async () => {
+    const { getOrCreateContact } = await import('../queries/contacts.js')
+    const existing: Contact = {
+      id: 'contact-1', instance_id: 'inst-1', phone: '5511999998888',
+      name: 'Nome Antigo', profile_picture_url: null, is_group: false,
+      notes: null, name_edited_by_user: false, created_at: '2026-01-01T00:00:00Z',
+    }
+    const updated: Contact = { ...existing, name: 'PushName Novo' }
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: existing, error: null }),
+      update: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: updated, error: null }),
+    }
+    const result = await getOrCreateContact(makeDb(chain), 'inst-1', '5511999998888', 'PushName Novo')
+    expect(result).toEqual(updated)
+    expect(chain.update).toHaveBeenCalledWith({ name: 'PushName Novo' })
   })
 })
