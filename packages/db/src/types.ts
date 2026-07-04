@@ -40,6 +40,7 @@ export interface Contact {
   phone: string
   name: string | null
   profile_picture_url: string | null
+  is_group: boolean
   created_at: string
 }
 
@@ -134,7 +135,7 @@ export interface Database {
       }
       contacts: {
         Row: { [K in keyof Contact]: Contact[K] }
-        Insert: Omit<Contact, 'id' | 'created_at' | 'profile_picture_url'> & { profile_picture_url?: string | null }
+        Insert: Omit<Contact, 'id' | 'created_at' | 'profile_picture_url' | 'is_group'> & { profile_picture_url?: string | null; is_group?: boolean }
         Update: Partial<Omit<Contact, 'id' | 'created_at'>>
         Relationships: Relationship[]
       }

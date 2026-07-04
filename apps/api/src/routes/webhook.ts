@@ -71,10 +71,8 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
       return reply.status(401).send({ error: 'Unauthorized' })
     }
 
-    // Skip group messages — only handle direct contact messages
-    if (payload.data.key.remoteJid.endsWith('@g.us')) {
-      return reply.status(200).send({ ok: true, skipped: 'group' })
-    }
+    // Group messages are saved so the CRM can show them, but the AI never auto-replies in groups
+    const isGroup = payload.data.key.remoteJid.endsWith('@g.us')
 
     const msg = payload.data.message as Record<string, unknown> | undefined
     const extracted = extractContent(msg)
@@ -87,12 +85,32 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
 
     const phone = payload.data.key.remoteJid.split('@')[0] ?? payload.data.key.remoteJid
 
-    // For fromMe messages, pushName is the user's own WhatsApp name — never use it as the contact name
-    const contactName = payload.data.key.fromMe ? undefined : payload.data.pushName
-    const contact = await getOrCreateContact(db, instance.id, phone, contactName)
+    // For fromMe messages, pushName is the user's own WhatsApp name — never use it as the contact name.
+    // In groups, pushName is the participant who sent the message, not the group name — never use it either.
+    const contactName = payload.data.key.fromMe || isGroup ? undefined : payload.data.pushName
+    const contact = await getOrCreateContact(db, instance.id, phone, contactName, isGroup)
 
-    // Fetch WhatsApp profile picture once (when not yet stored)
-    if (!contact.profile_picture_url) {
+    // Fetch group name once (when not yet stored)
+    if (isGroup && !contact.name) {
+      try {
+        const evoUrl = process.env['EVOLUTION_API_URL']!
+        const evoKey = process.env['EVOLUTION_API_KEY']!
+        const r = await fetch(
+          `${evoUrl}/group/findGroupInfos/${payload.instance}?groupJid=${payload.data.key.remoteJid}`,
+          { headers: { apikey: evoKey } },
+        )
+        if (r.ok) {
+          const info = await r.json() as { subject?: string }
+          if (info.subject) {
+            await db.from('contacts').update({ name: info.subject }).eq('id', contact.id)
+          }
+        }
+      } catch { /* group name is optional — contact keeps the group JID as phone */ }
+    }
+
+    // Fetch WhatsApp profile picture once (when not yet stored) — individual contacts only,
+    // fetchProfilePictureUrl expects a phone number, not a group JID
+    if (!isGroup && !contact.profile_picture_url) {
       try {
         const evoUrl = process.env['EVOLUTION_API_URL']!
         const evoKey = process.env['EVOLUTION_API_KEY']!
@@ -141,6 +159,9 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     if (!upserted) return reply.status(200).send({ ok: true, skipped: 'duplicate' })
 
     await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
+
+    // CRITICAL: never enqueue group messages for the LLM — the AI must not auto-reply in groups
+    if (isGroup) return reply.status(200).send({ ok: true, groupSaved: true })
 
     // Only enqueue text messages for LLM processing — agent can't process audio/images
     if (!isText) return reply.status(200).send({ ok: true, mediaSaved: true })

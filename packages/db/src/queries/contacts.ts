@@ -6,6 +6,7 @@ export async function getOrCreateContact(
   instanceId: string,
   phone: string,
   name?: string,
+  isGroup = false,
 ): Promise<Contact> {
   // Check if contact already exists
   const { data: existing } = await db
@@ -34,7 +35,7 @@ export async function getOrCreateContact(
   const { data } = await db
     .from('contacts')
     .upsert(
-      { instance_id: instanceId, phone, name: name ?? null },
+      { instance_id: instanceId, phone, name: name ?? null, is_group: isGroup },
       { onConflict: 'instance_id,phone', ignoreDuplicates: true },
     )
     .select('*')
