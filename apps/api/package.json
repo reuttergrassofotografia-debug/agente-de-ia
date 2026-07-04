@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --env-file=../../.env --import tsx/esm --watch src/index.ts",
+    "backfill:photos": "node --env-file=../../.env --import tsx/esm src/scripts/backfill-profile-pictures.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
