@@ -28,13 +28,20 @@ Separadamente, o CRM já tem uma entidade "Cliente" (tabela `clientes`) com seu 
 
 ## 4. Schema de Dados
 
-Nova coluna em `contacts` (schema compartilhado, migration vive no repo `agente-de-ia`, mesmo padrão de `is_group` e `profile_picture_url`):
+Novas colunas em `contacts` (schema compartilhado, migration vive no repo `agente-de-ia`, mesmo padrão de `is_group` e `profile_picture_url`):
 
 ```sql
 alter table contacts add column if not exists notes text;
+alter table contacts add column if not exists name_edited_by_user boolean not null default false;
 ```
 
 `clientes` não ganha nenhuma coluna nova — apenas `nome` é atualizado quando aplicável.
+
+### 4.1 Conflito com o webhook (descoberto durante o planejamento)
+
+`getOrCreateContact` (`packages/db/src/queries/contacts.ts`, repo `agente-de-ia`) hoje **sempre** sobrescreve `contacts.name` com o `pushName` recebido do WhatsApp a cada mensagem nova (comportamento deliberado, commit `b502a9e`). Sem ajuste, um nome editado manualmente no CRM seria revertido assim que o contato mandasse a próxima mensagem.
+
+Solução: a coluna `name_edited_by_user` marca que o nome atual veio de uma edição manual. `updateContactDetails` (seção 5) seta essa flag para `true` ao salvar. `getOrCreateContact` passa a pular a sobrescrita de nome quando `existing.name_edited_by_user === true`, independente do `pushName` recebido — a partir daí o nome só muda por nova edição manual no CRM.
 
 ## 5. Sincronização nome Inbox ↔ Cliente
 
