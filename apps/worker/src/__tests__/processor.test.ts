@@ -2,19 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Job } from 'bullmq'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EvolutionClient } from '@agente/evolution'
-import type { Database, MessageJob } from '@agente/db'
+import type { Database } from '@agente/db'
+import type { MessageJob } from '@agente/queue'
 
 const mockGetAgentByInstanceId = vi.fn()
+const mockGetConversation = vi.fn()
 const mockGetConversationMessages = vi.fn()
 const mockCreateMessage = vi.fn()
 const mockUpdateMessageStatus = vi.fn()
+const mockActivateConversationAgent = vi.fn()
 const mockRunAgent = vi.fn()
 
 vi.mock('@agente/db', () => ({
   getAgentByInstanceId: (...args: unknown[]) => mockGetAgentByInstanceId(...args),
+  getConversation: (...args: unknown[]) => mockGetConversation(...args),
   getConversationMessages: (...args: unknown[]) => mockGetConversationMessages(...args),
   createMessage: (...args: unknown[]) => mockCreateMessage(...args),
   updateMessageStatus: (...args: unknown[]) => mockUpdateMessageStatus(...args),
+  activateConversationAgent: (...args: unknown[]) => mockActivateConversationAgent(...args),
 }))
 
 vi.mock('@agente/llm', () => ({
@@ -35,6 +40,7 @@ const JOB_DATA: MessageJob = {
   conversationId: 'conv-1',
   evolutionInstanceName: 'test-instance',
   contactPhone: '5511999999999',
+  conversationTriggered: false,
 }
 
 const makeJob = (data = JOB_DATA) => ({ data, opts: { attempts: 4 } } as unknown as Job<MessageJob>)
@@ -53,6 +59,10 @@ describe('processMessage', () => {
     mockEvolution = { sendText: vi.fn().mockResolvedValue(undefined) }
     mockDb = {} as SupabaseClient<Database>
     mockGetAgentByInstanceId.mockResolvedValue(AGENT)
+    mockGetConversation.mockResolvedValue({
+      id: 'conv-1', contact_id: 'contact-1', instance_id: 'inst-1', agent_id: 'agent-1',
+      status: 'active', last_message_at: null, agent_triggered: false, created_at: '',
+    })
     mockGetConversationMessages.mockResolvedValue(MESSAGES)
     mockCreateMessage.mockResolvedValue({ id: 'msg-reply-1' })
     mockUpdateMessageStatus.mockResolvedValue(undefined)
