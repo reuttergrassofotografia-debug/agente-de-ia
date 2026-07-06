@@ -168,8 +168,10 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
 
     await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
 
-    // Best-effort — never blocks the response, media fetch failures leave the text placeholder in place
-    if (!isText) await fetchAndStoreMedia(db, payload.instance, payload.data.key.id, upserted.id)
+    // Fire-and-forget: fetchAndStoreMedia never throws (it has its own internal try/catch), and
+    // the webhook must respond quickly regardless of how long the media download/upload takes —
+    // waiting here risks Evolution API treating a slow response as a timeout and retrying delivery.
+    if (!isText) void fetchAndStoreMedia(db, payload.instance, payload.data.key.id, upserted.id)
 
     // CRITICAL: never enqueue group messages for the LLM — the AI must not auto-reply in groups
     if (isGroup) return reply.status(200).send({ ok: true, groupSaved: true })

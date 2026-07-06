@@ -336,6 +336,7 @@ describe('POST /webhook', () => {
       payload,
     })
     expect(res.statusCode).toBe(200)
+    await new Promise(resolve => setImmediate(resolve))
     expect(upload).toHaveBeenCalledWith('msg-1', expect.any(Buffer), { contentType: 'audio/ogg' })
     expect(messagesUpdate).toHaveBeenCalledWith({ media_path: 'msg-1', media_mimetype: 'audio/ogg' })
   })
