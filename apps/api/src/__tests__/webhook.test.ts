@@ -81,9 +81,12 @@ function makeMockDb() {
     }),
     then: (resolve: (v: { data: null; error: null }) => void) => resolve({ data: null, error: null }),
   }))
+  const messagesUpdate = vi.fn(() => ({ eq: async () => ({ data: null, error: null }) }))
   const update = vi.fn(() => ({ eq: async () => ({ data: null, error: null }) }))
-  const from = vi.fn((table: string) => (table === 'messages' ? { upsert: messagesUpsert } : { update }))
-  return { db: { from } as unknown as SupabaseClient<Database>, messagesUpsert, update, state }
+  const from = vi.fn((table: string) => (table === 'messages' ? { upsert: messagesUpsert, update: messagesUpdate } : { update }))
+  const upload = vi.fn(async () => ({ error: null }))
+  const storage = { from: vi.fn(() => ({ upload })) }
+  return { db: { from, storage } as unknown as SupabaseClient<Database>, messagesUpsert, messagesUpdate, update, upload, state }
 }
 
 async function buildApp() {
@@ -283,5 +286,57 @@ describe('POST /webhook', () => {
     )
     expect(update).toHaveBeenCalledWith({ name: 'My Group' })
     expect(mockEnqueueMessage).not.toHaveBeenCalled()
+  })
+
+  it('captures sender phone and name for group messages', async () => {
+    mockGetOrCreateContact.mockResolvedValue(GROUP_CONTACT)
+    const payload = {
+      ...GROUP_PAYLOAD,
+      data: { ...GROUP_PAYLOAD.data, key: { ...GROUP_PAYLOAD.data.key, participant: '5511988887777@s.whatsapp.net' } },
+    }
+    const { app, messagesUpsert } = await buildApp()
+    const res = await app.inject({
+      method: 'POST', url: '/webhook',
+      headers: { apikey: 'correct-secret' },
+      payload,
+    })
+    expect(res.statusCode).toBe(200)
+    expect(messagesUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ sender_phone: '5511988887777', sender_name: 'Some Participant' }),
+      expect.anything(),
+    )
+  })
+
+  it('does not set sender_phone/sender_name for individual (non-group) messages', async () => {
+    const { app, messagesUpsert } = await buildApp()
+    await app.inject({
+      method: 'POST', url: '/webhook',
+      headers: { apikey: 'correct-secret' },
+      payload: VALID_PAYLOAD,
+    })
+    expect(messagesUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ sender_phone: null, sender_name: null }),
+      expect.anything(),
+    )
+  })
+
+  it('fetches and stores media for non-text messages', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (typeof url === 'string' && url.includes('getBase64FromMediaMessage')) {
+        return { ok: true, json: async () => ({ base64: Buffer.from('fake').toString('base64'), mimetype: 'audio/ogg' }) }
+      }
+      return { ok: false }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const payload = { ...VALID_PAYLOAD, data: { ...VALID_PAYLOAD.data, message: { audioMessage: {} } } }
+    const { app, upload, messagesUpdate } = await buildApp()
+    const res = await app.inject({
+      method: 'POST', url: '/webhook',
+      headers: { apikey: 'correct-secret' },
+      payload,
+    })
+    expect(res.statusCode).toBe(200)
+    expect(upload).toHaveBeenCalledWith('msg-1', expect.any(Buffer), { contentType: 'audio/ogg' })
+    expect(messagesUpdate).toHaveBeenCalledWith({ media_path: 'msg-1', media_mimetype: 'audio/ogg' })
   })
 })

@@ -10,6 +10,7 @@ import {
 } from '@agente/db'
 import { enqueueMessage, type MessageJob } from '@agente/queue'
 import { WebhookPayloadSchema } from '../schemas/webhook.js'
+import { fetchAndStoreMedia } from '../lib/fetch-and-store-media.js'
 
 interface WebhookDeps {
   db: SupabaseClient<Database>
@@ -90,6 +91,11 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     const contactName = payload.data.key.fromMe || isGroup ? undefined : payload.data.pushName
     const contact = await getOrCreateContact(db, instance.id, phone, contactName, isGroup)
 
+    // Group message sender attribution — pushName here is correctly the participant's name
+    // (message-level identity), not the contact-level name that was intentionally skipped above.
+    const senderPhone = isGroup ? payload.data.key.participant?.split('@')[0] ?? null : null
+    const senderName = isGroup ? payload.data.pushName ?? null : null
+
     // Fetch group name once (when not yet stored)
     if (isGroup && !contact.name) {
       try {
@@ -151,6 +157,8 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
       content,
       evolution_message_id: payload.data.key.id,
       status: 'pending',
+      sender_phone: senderPhone,
+      sender_name: senderName,
     }, { onConflict: 'evolution_message_id', ignoreDuplicates: true })
       .select('id')
       .maybeSingle()
@@ -159,6 +167,9 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
     if (!upserted) return reply.status(200).send({ ok: true, skipped: 'duplicate' })
 
     await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
+
+    // Best-effort — never blocks the response, media fetch failures leave the text placeholder in place
+    if (!isText) await fetchAndStoreMedia(db, payload.instance, payload.data.key.id, upserted.id)
 
     // CRITICAL: never enqueue group messages for the LLM — the AI must not auto-reply in groups
     if (isGroup) return reply.status(200).send({ ok: true, groupSaved: true })

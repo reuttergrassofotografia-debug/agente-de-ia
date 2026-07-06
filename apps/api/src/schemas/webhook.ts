@@ -9,6 +9,7 @@ export const WebhookPayloadSchema = z.object({
       remoteJid: z.string(),
       fromMe: z.boolean(),
       id: z.string(),
+      participant: z.string().optional(),
     }),
     message: z.record(z.unknown()).optional(),
     pushName: z.string().optional(),
