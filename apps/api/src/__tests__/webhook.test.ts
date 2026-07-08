@@ -86,7 +86,8 @@ function makeMockDb() {
   const from = vi.fn((table: string) => (table === 'messages' ? { upsert: messagesUpsert, update: messagesUpdate } : { update }))
   const upload = vi.fn(async () => ({ error: null }))
   const storage = { from: vi.fn(() => ({ upload })) }
-  return { db: { from, storage } as unknown as SupabaseClient<Database>, messagesUpsert, messagesUpdate, update, upload, state }
+  const rpc = vi.fn(async () => ({ data: null, error: null }))
+  return { db: { from, storage, rpc } as unknown as SupabaseClient<Database>, messagesUpsert, messagesUpdate, update, upload, rpc, state }
 }
 
 async function buildApp() {
@@ -339,5 +340,28 @@ describe('POST /webhook', () => {
     await new Promise(resolve => setImmediate(resolve))
     expect(upload).toHaveBeenCalledWith('msg-1', expect.any(Buffer), { contentType: 'audio/ogg' })
     expect(messagesUpdate).toHaveBeenCalledWith({ media_path: 'msg-1', media_mimetype: 'audio/ogg' })
+  })
+
+  it('increments unread_count when a message is received from the contact', async () => {
+    const { app, rpc } = await buildApp()
+    const res = await app.inject({
+      method: 'POST', url: '/webhook',
+      headers: { apikey: 'correct-secret' },
+      payload: VALID_PAYLOAD,
+    })
+    expect(res.statusCode).toBe(200)
+    expect(rpc).toHaveBeenCalledWith('increment_unread_count', { conv_id: 'conv-1' })
+  })
+
+  it('does not increment unread_count for fromMe messages', async () => {
+    const { app, rpc } = await buildApp()
+    const payload = { ...VALID_PAYLOAD, data: { ...VALID_PAYLOAD.data, key: { ...VALID_PAYLOAD.data.key, fromMe: true } } }
+    const res = await app.inject({
+      method: 'POST', url: '/webhook',
+      headers: { apikey: 'correct-secret' },
+      payload,
+    })
+    expect(res.statusCode).toBe(200)
+    expect(rpc).not.toHaveBeenCalled()
   })
 })

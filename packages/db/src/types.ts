@@ -54,6 +54,7 @@ export interface Conversation {
   status: ConversationStatus
   last_message_at: string | null
   agent_triggered: boolean
+  unread_count: number
   created_at: string
 }
 
@@ -171,7 +172,12 @@ export interface Database {
       }
     }
     Views: { [K in never]: never }
-    Functions: { [K in never]: never }
+    Functions: {
+      increment_unread_count: {
+        Args: { conv_id: string }
+        Returns: void
+      }
+    }
     Enums: { [K in never]: never }
   }
 }

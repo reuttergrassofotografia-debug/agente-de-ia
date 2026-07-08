@@ -168,6 +168,11 @@ export function registerWebhookRoute(app: FastifyInstance, { db, queue }: Webhoo
 
     await db.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversation.id)
 
+    // Atomic increment (Postgres function) — a plain read-then-write in JS would lose
+    // increments if two messages (e.g. a group burst) arrive nearly simultaneously.
+    // Fast and synchronous, unlike the media fetch below: no need to fire-and-forget it.
+    await db.rpc('increment_unread_count', { conv_id: conversation.id })
+
     // Fire-and-forget: fetchAndStoreMedia never throws (it has its own internal try/catch), and
     // the webhook must respond quickly regardless of how long the media download/upload takes —
     // waiting here risks Evolution API treating a slow response as a timeout and retrying delivery.
