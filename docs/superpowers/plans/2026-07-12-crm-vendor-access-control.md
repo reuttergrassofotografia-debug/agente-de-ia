@@ -1537,3 +1537,153 @@ Expected: sucesso.
 git add app/dashboard/inbox/actions.ts
 git commit -m "fix(inbox): let vendedor claim unowned conversations, enforce ownership on individual actions"
 ```
+
+---
+
+### Task 7: CRM — Inbox: cobrir `scheduleMessage`/`updateContactDetails`, falhar fechado em erro de consulta
+
+**Repo:** `C:\Users\rgrasso\claude teste\meu-crm` (branch `main`)
+
+**Depends on:** Task 6 (mesmo arquivo). Adicionada depois da segunda revisão final de branch, que perguntou explicitamente se `updateContactDetails`/`scheduleMessage` eram uma fronteira defensável — não são: são o mesmo tipo de brecha que a Task 6 fechou nas outras funções, só que nessas duas ninguém tinha olhado ainda. `scheduleMessage` é a mais grave: o worker do `agente-de-ia` processa `scheduled_messages` pendentes e manda de verdade pro WhatsApp depois — um vendedor conseguiria mandar mensagem numa conversa que não é dele só agendando em vez de mandar direto.
+
+**Files:**
+- Modify: `app/dashboard/inbox/actions.ts`
+
+**Interfaces:**
+- Produces: `podeAcessarContato(contactId: string): Promise<boolean>` — helper interno, mesma regra de `podeAcessarConversa` mas partindo direto do `contactId` (não precisa do passo extra de resolver `conversation → contact_id`).
+- Não muda assinatura pública de nenhuma função existente.
+
+- [ ] **Step 1: `podeAcessarConversa` — falhar fechado se a consulta do contato não retornar linha**
+
+Troque:
+
+```ts
+  const { data: contato } = await admin.from('contacts').select('responsavel_id').eq('id', conversa.contact_id).single()
+  return !contato?.responsavel_id || contato.responsavel_id === user.id
+}
+```
+
+por:
+
+```ts
+  const { data: contato } = await admin.from('contacts').select('responsavel_id').eq('id', conversa.contact_id).single()
+  // Falha fechado: se a consulta não retornar linha nenhuma (erro transitório,
+  // FK pendurada, ou a coluna responsavel_id ainda não existir porque a migration
+  // não rodou), nega em vez de liberar — antes disso caía no `!contato?.responsavel_id`
+  // (que também é `true` quando `contato` é `null`), liberando acesso sem querer.
+  if (!contato) return false
+  return !contato.responsavel_id || contato.responsavel_id === user.id
+}
+```
+
+- [ ] **Step 2: Adicionar `podeAcessarContato`**
+
+Logo depois do fim de `podeAcessarConversa` (antes de `export async function getMensagens`), adicione:
+
+```ts
+
+// Mesma regra de podeAcessarConversa, mas a partir do contato direto — usada por
+// funções que já recebem contactId em vez de conversationId.
+async function podeAcessarContato(contactId: string): Promise<boolean> {
+  const authClient = await createClient()
+  const { data: { user } } = await authClient.auth.getUser()
+  if (!user) return false
+
+  const { data: meuPerfil } = await authClient.from('profiles').select('perfil').eq('id', user.id).single()
+  if ((meuPerfil?.perfil ?? 'vendedor') !== 'vendedor') return true
+
+  const admin = createAdminClient()
+  const { data: contato } = await admin.from('contacts').select('responsavel_id').eq('id', contactId).single()
+  if (!contato) return false
+  return !contato.responsavel_id || contato.responsavel_id === user.id
+}
+```
+
+- [ ] **Step 3: `scheduleMessage` — checar dono, lançar erro**
+
+Troque:
+
+```ts
+export async function scheduleMessage(
+  conversationId: string,
+  content: string,
+  scheduledAt: string,
+  mediaBase64?: string,
+  mediaType?: 'text' | 'image' | 'audio',
+  mimetype?: string,
+) {
+  const supabase = createAdminClient()
+  await supabase.from('scheduled_messages').insert({
+```
+
+por:
+
+```ts
+export async function scheduleMessage(
+  conversationId: string,
+  content: string,
+  scheduledAt: string,
+  mediaBase64?: string,
+  mediaType?: 'text' | 'image' | 'audio',
+  mimetype?: string,
+) {
+  if (!(await podeAcessarConversa(conversationId))) throw new Error('Sem permissão para esta conversa')
+  const supabase = createAdminClient()
+  await supabase.from('scheduled_messages').insert({
+```
+
+- [ ] **Step 4: `updateContactDetails` — checar dono, lançar erro**
+
+Troque:
+
+```ts
+export async function updateContactDetails(
+  contactId: string,
+  phone: string,
+  name: string,
+  notes: string | null,
+) {
+  const trimmedName = name.trim()
+  if (!trimmedName) throw new Error('Nome não pode ser vazio')
+
+  const supabase = createAdminClient()
+```
+
+por:
+
+```ts
+export async function updateContactDetails(
+  contactId: string,
+  phone: string,
+  name: string,
+  notes: string | null,
+) {
+  const trimmedName = name.trim()
+  if (!trimmedName) throw new Error('Nome não pode ser vazio')
+
+  if (!(await podeAcessarContato(contactId))) throw new Error('Sem permissão para este contato')
+
+  const supabase = createAdminClient()
+```
+
+- [ ] **Step 5: Typecheck**
+
+Run: `npx tsc --noEmit`
+Expected: mesmo erro pré-existente conhecido e nenhum erro novo.
+
+- [ ] **Step 6: Lint**
+
+Run: `npm run lint`
+Expected: mesma contagem do baseline.
+
+- [ ] **Step 7: Build**
+
+Run: `npm run build`
+Expected: sucesso.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add app/dashboard/inbox/actions.ts
+git commit -m "fix(inbox): guard scheduleMessage/updateContactDetails and fail closed on lookup errors"
+```
