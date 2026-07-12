@@ -1242,3 +1242,298 @@ Se não houver navegador disponível, pule este step e reporte explicitamente qu
 git add app/dashboard/inbox/page.tsx components/inbox/inbox-panel.tsx components/inbox/mensagem-thread.tsx
 git commit -m "feat(inbox): add UI to reassign conversation ownership"
 ```
+
+---
+
+### Task 6: CRM — Inbox: vendedor vê e reivindica conversas sem dono; ações individuais passam a checar dono
+
+**Repo:** `C:\Users\rgrasso\claude teste\meu-crm` (branch `main`)
+
+**Depends on:** Tasks 4-5 (mesmo arquivo). Adicionada após a revisão final de branch da Task 5 encontrar três problemas: (1) só a listagem tinha checagem de dono — `getMensagens`, `pauseConversa`, `resumeConversa`, `marcarComoLida` e as três funções de envio não checavam nada, um vendedor que soubesse o `conversationId` de outro conseguia agir na conversa direto, sem passar pela tela; (2) o filtro da listagem escondia conversas sem dono de vendedor, então só admin/gerente conseguiam ver (e "reivindicar" sem querer) uma conversa nova; (3) confirmado com o usuário: vendedor deve ver conversas sem dono também, pra poder puxar — uma vez que ele responde, ela vira dele.
+
+**Files:**
+- Modify: `app/dashboard/inbox/actions.ts`
+
+**Interfaces:**
+- Produces: `podeAcessarConversa(conversationId: string): Promise<boolean>` — helper interno, não exportado, usado só dentro deste arquivo.
+- Não muda a assinatura pública de nenhuma função existente (`getMensagens`, `pauseConversa`, `resumeConversa`, `marcarComoLida`, `sendTextMessage`, `sendMediaMessage`, `sendAudioMessage` continuam com os mesmos parâmetros).
+
+- [ ] **Step 1: `getConversacoes` — vendedor vê o que é seu E o que não tem dono ainda**
+
+Troque:
+
+```ts
+  if (souVendedor && user) query = query.eq('contacts.responsavel_id', user.id)
+```
+
+por:
+
+```ts
+  // Vendedor vê tanto o que já é seu quanto conversas sem dono ainda — é assim
+  // que ele "puxa" um lead novo (responder uma delas torna ele o dono, via
+  // atribuirResponsavelSeNecessario). Uma vez atribuída a outro vendedor, ela
+  // some da lista dos demais.
+  if (souVendedor && user) query = query.or(`responsavel_id.eq.${user.id},responsavel_id.is.null`, { foreignTable: 'contacts' })
+```
+
+- [ ] **Step 2: Adicionar o helper `podeAcessarConversa`**
+
+Logo depois do fim de `getConversacoes` (antes de `export async function getMensagens`), adicione:
+
+```ts
+
+// Retorna true se o usuário logado pode agir nesta conversa: admin/gerente sempre
+// podem; vendedor só se for o dono do contato dela, ou se ela ainda não tiver dono
+// nenhum — mesma regra "pode ver e reivindicar" já aplicada em getConversacoes.
+async function podeAcessarConversa(conversationId: string): Promise<boolean> {
+  const authClient = await createClient()
+  const { data: { user } } = await authClient.auth.getUser()
+  if (!user) return false
+
+  const { data: meuPerfil } = await authClient.from('profiles').select('perfil').eq('id', user.id).single()
+  if ((meuPerfil?.perfil ?? 'vendedor') !== 'vendedor') return true
+
+  const admin = createAdminClient()
+  const { data: conversa } = await admin.from('conversations').select('contact_id').eq('id', conversationId).single()
+  if (!conversa?.contact_id) return false
+
+  const { data: contato } = await admin.from('contacts').select('responsavel_id').eq('id', conversa.contact_id).single()
+  return !contato?.responsavel_id || contato.responsavel_id === user.id
+}
+```
+
+- [ ] **Step 3: `getMensagens` e `marcarComoLida` — checar dono silenciosamente**
+
+São funções chamadas automaticamente (polling a cada 3s, e ao selecionar/atualizar via Realtime), não por um clique direto do usuário — por isso, sem dono retorna vazio/não faz nada, em vez de lançar erro.
+
+Troque:
+
+```ts
+export async function getMensagens(conversationId: string) {
+  const supabase = createAdminClient()
+  const { data } = await supabase
+    .from('messages')
+```
+
+por:
+
+```ts
+export async function getMensagens(conversationId: string) {
+  if (!(await podeAcessarConversa(conversationId))) return []
+
+  const supabase = createAdminClient()
+  const { data } = await supabase
+    .from('messages')
+```
+
+Troque:
+
+```ts
+export async function marcarComoLida(conversationId: string) {
+  const supabase = createAdminClient()
+  await supabase.from('conversations').update({ unread_count: 0 }).eq('id', conversationId)
+}
+```
+
+por:
+
+```ts
+export async function marcarComoLida(conversationId: string) {
+  if (!(await podeAcessarConversa(conversationId))) return
+  const supabase = createAdminClient()
+  await supabase.from('conversations').update({ unread_count: 0 }).eq('id', conversationId)
+}
+```
+
+- [ ] **Step 4: `pauseConversa` e `resumeConversa` — checar dono, lançar erro**
+
+São ações de clique direto do usuário — mesmo padrão de erro já usado em `reatribuirConversa`.
+
+Troque:
+
+```ts
+export async function pauseConversa(conversationId: string) {
+  const supabase = createAdminClient()
+  await supabase.from('conversations').update({ status: 'paused' }).eq('id', conversationId)
+}
+
+export async function resumeConversa(conversationId: string) {
+  const supabase = createAdminClient()
+  await supabase.from('conversations').update({ status: 'active' }).eq('id', conversationId)
+}
+```
+
+por:
+
+```ts
+export async function pauseConversa(conversationId: string) {
+  if (!(await podeAcessarConversa(conversationId))) throw new Error('Sem permissão para esta conversa')
+  const supabase = createAdminClient()
+  await supabase.from('conversations').update({ status: 'paused' }).eq('id', conversationId)
+}
+
+export async function resumeConversa(conversationId: string) {
+  if (!(await podeAcessarConversa(conversationId))) throw new Error('Sem permissão para esta conversa')
+  const supabase = createAdminClient()
+  await supabase.from('conversations').update({ status: 'active' }).eq('id', conversationId)
+}
+```
+
+- [ ] **Step 5: `atribuirResponsavelSeNecessario` — só vendedor reivindica**
+
+Troque:
+
+```ts
+async function atribuirResponsavelSeNecessario(conversationId: string) {
+  const authClient = await createClient()
+  const { data: { user } } = await authClient.auth.getUser()
+  if (!user) return
+
+  const admin = createAdminClient()
+  const { data: conversa } = await admin.from('conversations').select('contact_id').eq('id', conversationId).single()
+  if (!conversa?.contact_id) return
+
+  await admin.from('contacts').update({ responsavel_id: user.id }).eq('id', conversa.contact_id).is('responsavel_id', null)
+}
+```
+
+por:
+
+```ts
+async function atribuirResponsavelSeNecessario(conversationId: string) {
+  const authClient = await createClient()
+  const { data: { user } } = await authClient.auth.getUser()
+  if (!user) return
+
+  // Só vendedor "puxa" uma conversa sem dono ao responder — é assim que ele reivindica
+  // um lead novo. Se quem respondeu for admin/gerente, não faz sentido virar o
+  // "responsável" dela: isso é papel da reatribuição manual (reatribuirConversa).
+  const { data: meuPerfil } = await authClient.from('profiles').select('perfil').eq('id', user.id).single()
+  if ((meuPerfil?.perfil ?? 'vendedor') !== 'vendedor') return
+
+  const admin = createAdminClient()
+  const { data: conversa } = await admin.from('conversations').select('contact_id').eq('id', conversationId).single()
+  if (!conversa?.contact_id) return
+
+  await admin.from('contacts').update({ responsavel_id: user.id }).eq('id', conversa.contact_id).is('responsavel_id', null)
+}
+```
+
+- [ ] **Step 6: As três funções de envio — checar dono, lançar erro**
+
+Troque:
+
+```ts
+export async function sendTextMessage(
+  conversationId: string,
+  instanceName: string,
+  phone: string,
+  content: string,
+) {
+  const supabase = createAdminClient()
+  const evoRes = await evoFetch(`/message/sendText/${instanceName}`, { number: phone, text: content })
+  await atribuirResponsavelSeNecessario(conversationId)
+```
+
+por:
+
+```ts
+export async function sendTextMessage(
+  conversationId: string,
+  instanceName: string,
+  phone: string,
+  content: string,
+) {
+  if (!(await podeAcessarConversa(conversationId))) throw new Error('Sem permissão para esta conversa')
+  const supabase = createAdminClient()
+  const evoRes = await evoFetch(`/message/sendText/${instanceName}`, { number: phone, text: content })
+  await atribuirResponsavelSeNecessario(conversationId)
+```
+
+Troque:
+
+```ts
+export async function sendMediaMessage(
+  conversationId: string,
+  instanceName: string,
+  phone: string,
+  mediaBase64: string,
+  mimetype: string,
+  caption: string,
+) {
+  const supabase = createAdminClient()
+  const mediatype = mimetype.startsWith('image/') ? 'image' : mimetype.startsWith('video/') ? 'video' : 'document'
+  const evoRes = await evoFetch(`/message/sendMedia/${instanceName}`, { number: phone, mediatype, mimetype, caption, media: mediaBase64 })
+  await atribuirResponsavelSeNecessario(conversationId)
+```
+
+por:
+
+```ts
+export async function sendMediaMessage(
+  conversationId: string,
+  instanceName: string,
+  phone: string,
+  mediaBase64: string,
+  mimetype: string,
+  caption: string,
+) {
+  if (!(await podeAcessarConversa(conversationId))) throw new Error('Sem permissão para esta conversa')
+  const supabase = createAdminClient()
+  const mediatype = mimetype.startsWith('image/') ? 'image' : mimetype.startsWith('video/') ? 'video' : 'document'
+  const evoRes = await evoFetch(`/message/sendMedia/${instanceName}`, { number: phone, mediatype, mimetype, caption, media: mediaBase64 })
+  await atribuirResponsavelSeNecessario(conversationId)
+```
+
+Troque:
+
+```ts
+export async function sendAudioMessage(
+  conversationId: string,
+  instanceName: string,
+  phone: string,
+  audioBase64: string,
+  mimetype: string,
+) {
+  const supabase = createAdminClient()
+  const evoRes = await evoFetch(`/message/sendWhatsAppAudio/${instanceName}`, { number: phone, audio: audioBase64, encoding: true })
+  await atribuirResponsavelSeNecessario(conversationId)
+```
+
+por:
+
+```ts
+export async function sendAudioMessage(
+  conversationId: string,
+  instanceName: string,
+  phone: string,
+  audioBase64: string,
+  mimetype: string,
+) {
+  if (!(await podeAcessarConversa(conversationId))) throw new Error('Sem permissão para esta conversa')
+  const supabase = createAdminClient()
+  const evoRes = await evoFetch(`/message/sendWhatsAppAudio/${instanceName}`, { number: phone, audio: audioBase64, encoding: true })
+  await atribuirResponsavelSeNecessario(conversationId)
+```
+
+- [ ] **Step 7: Typecheck**
+
+Run: `npx tsc --noEmit`
+Expected: mesmo erro pré-existente conhecido e nenhum erro novo.
+
+- [ ] **Step 8: Lint**
+
+Run: `npm run lint`
+Expected: mesma contagem do baseline.
+
+- [ ] **Step 9: Build**
+
+Run: `npm run build`
+Expected: sucesso.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add app/dashboard/inbox/actions.ts
+git commit -m "fix(inbox): let vendedor claim unowned conversations, enforce ownership on individual actions"
+```
