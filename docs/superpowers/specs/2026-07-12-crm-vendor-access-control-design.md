@@ -1,6 +1,6 @@
 # CRM: Controle de Acesso por Vendedor (Funil, Clientes, Inbox)
 
-> **Nota sobre este spec:** diferente dos specs anteriores deste projeto, este não passou pelo fluxo normal de brainstorming (perguntas uma de cada vez, decisão confirmada pelo usuário antes de escrever). O usuário autorizou avançar sem supervisão em tempo real ("pode autorizar o que precisar, pode ser sem precisar de mim aqui") enquanto dormia, mas esta é uma mudança de acesso a dados reais usada pela equipe inteira todo dia — não é o tipo de decisão que faz sentido tomar sozinho. Fiz a investigação completa do estado atual e proponho um design com recomendação clara, mas **não avancei para o plano de implementação**. Este spec está marcado como proposta — precisa da sua revisão e decisão explícita antes de virar plano/código.
+> **Nota sobre este spec:** a investigação e a proposta foram feitas sem o fluxo normal de brainstorming em tempo real (o usuário tinha autorizado avançar sozinho enquanto dormia, mas eu parei antes do plano por ser uma decisão de acesso a dados da equipe inteira). Em 2026-07-12 o usuário revisou e confirmou a recomendação nas 3 decisões abaixo — as escolhas estão fechadas, o spec segue pro plano de implementação.
 
 ## Contexto
 
@@ -36,25 +36,23 @@ Nem `clientes.user_id` nem `negocios.responsavel_id` são preenchidos — ficam 
 
 A única correspondência é um match de telefone feito ad-hoc em pontos específicos do código (`adicionarAoFunil`, o botão "Funil" da conversa). Não é uma foreign key — é comparação de string. Um contato do WhatsApp só tem um `Cliente`/`Negocio` associado se alguém explicitamente clicou em "Funil" ou criou o negócio manualmente com aquele telefone.
 
-## Decisões necessárias (proposta, aguardando confirmação)
+## Decisões (confirmadas pelo usuário em 2026-07-12)
 
 ### Decisão 1 — Como o Inbox sabe de quem é a conversa?
 
-**Opção A — Derivar via match de telefone com `clientes.user_id`.** Barato (sem migration nova), mas furado: só funciona pra conversas cujo contato já virou Cliente com dono preenchido — e o Achado 3 mostra que isso nem sempre acontece hoje. Uma conversa nova, ou uma que virou negócio pelo botão do Inbox, ficaria "sem dono" e o comportamento pra esse caso teria que ser decidido (mostra pra todo mundo? Não mostra pra ninguém?).
+**Confirmado: Opção B — adicionar `contacts.responsavel_id` de verdade.** Migration nova em `agente-de-ia` (nova coluna, nullable — contato sem dono continua existindo, só não aparece pra vendedor nenhum até ser atribuído). Atribuição automática: o primeiro vendedor que responde a conversa vira o dono (grava no primeiro envio de mensagem pelo CRM), com opção de reatribuir manualmente depois.
 
-**Opção B — Adicionar `contacts.responsavel_id` de verdade (Recomendado).** Migration nova em `agente-de-ia` (nova coluna, nullable — contato sem dono continua existindo, só não aparece pra vendedor nenhum até ser atribuído). Precisa de uma forma de atribuir: a mais simples é "o primeiro vendedor que responde a conversa vira o dono automaticamente" (grava no primeiro envio de mensagem pelo CRM), com opção de reatribuir manualmente depois. Mais trabalho (schema + lógica de atribuição automática + UI de reatribuir), mas é a única opção que não depende de um match de telefone frágil e cobre 100% dos casos, incluindo conversas que nunca viram negócio.
-
-Minha recomendação é **B**, e também corrigir o Achado 3 (`adicionarAoFunil` passa a receber e gravar o `user_id` de quem clicou, em vez de usar só o client admin sem sessão) como parte da mesma mudança, já que os dois problemas são a mesma causa raiz (essa função não sabe quem é o usuário logado).
+Junto com isso, corrigir o Achado 3 (`adicionarAoFunil` passa a receber e gravar o `user_id` de quem clicou, em vez de usar só o client admin sem sessão) — os dois problemas são a mesma causa raiz.
 
 ### Decisão 2 — `gerente` vê o time inteiro, ou só o próprio, igual vendedor?
 
-Hoje o código trata os dois igual (só admin tem acesso total). Minha suposição — comum em CRM de vendas — é que gerente deveria enxergar/gerenciar o time inteiro (visão de supervisão), não só os próprios negócios/conversas/clientes. Isso muda a checagem em `negocios`, `clientes` e (se a Decisão 1 for B) `contacts` de `perfil !== 'admin'` para `perfil === 'vendedor'` — ou seja, restringe só vendedor, admin e gerente veem tudo.
+**Confirmado: gerente vê o time inteiro** (visão de supervisão), igual admin. A restrição de leitura passa a valer só pra `vendedor` — a checagem vira `perfil === 'vendedor'` em vez do atual `perfil !== 'admin'`.
 
 ### Decisão 3 — Restringir só Funil+Inbox, ou também Clientes (leitura)?
 
-O pedido original falava só em Funil e Inbox. Mas `clientes` já tem exatamente a mesma restrição de escrita por `user_id` que `negocios` tem por `responsavel_id`, e hoje tem o mesmo buraco na leitura. Deixar só Funil e Inbox restritos, com Clientes continuando 100% aberto pra leitura, seria uma meia-medida estranha — um vendedor não veria o negócio de um colega no Funil, mas veria o Cliente por trás dele inteiro (com telefone, email, etc.) na tela de Clientes. Recomendo incluir Clientes na mesma leva, já que a lógica e o padrão são idênticos aos de negócios.
+**Confirmado: incluir Clientes** na mesma restrição de leitura, já que a lógica e o padrão são idênticos aos de negócios.
 
-## Design proposto (assumindo Decisão 1 = B, Decisão 2 = time, Decisão 3 = incluir Clientes)
+## Design proposto
 
 - **`agente-de-ia`**: migration adicionando `contacts.responsavel_id uuid null references profiles(id)`. Nenhuma FK cross-database de verdade (profiles é do `meu-crm`/Supabase Auth, mas ambos os repos já compartilham o mesmo projeto Supabase, então a FK funciona).
 - **`meu-crm`**:
@@ -71,4 +69,4 @@ O pedido original falava só em Funil e Inbox. Mas `clientes` já tem exatamente
 
 ## Status
 
-**Proposta — aguardando decisão do usuário nas 3 perguntas acima antes de virar plano de implementação.**
+**Aprovado em 2026-07-12 — pronto para o plano de implementação.**
