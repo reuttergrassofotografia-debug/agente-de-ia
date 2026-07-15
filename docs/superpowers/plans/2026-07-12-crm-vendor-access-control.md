@@ -1687,3 +1687,194 @@ Expected: sucesso.
 git add app/dashboard/inbox/actions.ts
 git commit -m "fix(inbox): guard scheduleMessage/updateContactDetails and fail closed on lookup errors"
 ```
+
+---
+
+### Task 8: Backend — RLS de verdade nas tabelas do Inbox
+
+**Repo:** `C:\Users\rgrasso\agente de ia` (branch `master`)
+
+**Depends on:** nenhuma task de código (é uma migration nova, independente). Adicionada depois da terceira revisão final de branch encontrar que `contacts`, `conversations`, `messages` e `scheduled_messages` não têm RLS nenhuma — toda a restrição por vendedor construída nas Tasks 2-7 roda só dentro das server actions (que usam a service role key). O navegador também usa um client autenticado comum (anon key) — hoje só para o canal Realtime do Inbox, confirmado por auditoria de código (nenhum `.from(...)` direto em componente algum, só `.channel(...)` e `.auth.*`) — mas nada impede alguém de abrir o console do navegador e consultar essas tabelas direto, contornando toda a restrição. Confirmado com o usuário: adicionar a política real.
+
+**Files:**
+- Create: `supabase/migrations/20260714_inbox_rls.sql`
+
+**Interfaces:**
+- Produces: RLS habilitada + políticas de `SELECT` em `contacts`, `conversations`, `messages`, `scheduled_messages` — sem nenhuma política de escrita pra `authenticated` (todo escrita nessas tabelas, em ambos os repos, já passa pela service role key, que ignora RLS — não há caminho legítimo de escrita via `authenticated` a proteger). Consumida pelo CRM via Supabase direto (repo separado); como efeito colateral também passa a limitar corretamente o que o canal Realtime do Inbox entrega pra cada vendedor (Realtime respeita RLS).
+
+- [ ] **Step 1: Escrever a migration**
+
+Crie `supabase/migrations/20260714_inbox_rls.sql`:
+
+```sql
+-- Enables RLS on the Inbox tables (contacts, conversations, messages,
+-- scheduled_messages), which previously had none — meaning the CRM's
+-- per-vendedor restriction (built across a companion feature's server
+-- actions) only lived in application code, and was bypassable by any
+-- authenticated browser client querying these tables directly (e.g. via
+-- devtools). SELECT-only policies here: every read/write to these tables
+-- from both this repo's webhook/worker and the CRM's server actions
+-- already goes through the service-role key, which bypasses RLS entirely
+-- — so this only closes the direct-browser-access hole and correctly
+-- scopes what the Inbox's Realtime subscription (which does use the
+-- authenticated/anon client) delivers to each vendedor. No existing
+-- legitimate code path is affected.
+
+alter table contacts enable row level security;
+alter table conversations enable row level security;
+alter table messages enable row level security;
+alter table scheduled_messages enable row level security;
+
+-- ---- CONTACTS ----
+create policy "contacts_vendedor" on contacts
+for select using (
+  (select perfil from profiles where id = auth.uid()) = 'vendedor'
+  and (responsavel_id = auth.uid() or responsavel_id is null)
+);
+
+create policy "contacts_admin_gerente" on contacts
+for select using (
+  (select perfil from profiles where id = auth.uid()) in ('admin', 'gerente')
+);
+
+-- ---- CONVERSATIONS ----
+create policy "conversations_vendedor" on conversations
+for select using (
+  (select perfil from profiles where id = auth.uid()) = 'vendedor'
+  and exists (
+    select 1 from contacts c
+    where c.id = conversations.contact_id
+      and (c.responsavel_id = auth.uid() or c.responsavel_id is null)
+  )
+);
+
+create policy "conversations_admin_gerente" on conversations
+for select using (
+  (select perfil from profiles where id = auth.uid()) in ('admin', 'gerente')
+);
+
+-- ---- MESSAGES ----
+create policy "messages_vendedor" on messages
+for select using (
+  (select perfil from profiles where id = auth.uid()) = 'vendedor'
+  and exists (
+    select 1 from conversations conv
+    join contacts c on c.id = conv.contact_id
+    where conv.id = messages.conversation_id
+      and (c.responsavel_id = auth.uid() or c.responsavel_id is null)
+  )
+);
+
+create policy "messages_admin_gerente" on messages
+for select using (
+  (select perfil from profiles where id = auth.uid()) in ('admin', 'gerente')
+);
+
+-- ---- SCHEDULED_MESSAGES ----
+create policy "scheduled_messages_vendedor" on scheduled_messages
+for select using (
+  (select perfil from profiles where id = auth.uid()) = 'vendedor'
+  and exists (
+    select 1 from conversations conv
+    join contacts c on c.id = conv.contact_id
+    where conv.id = scheduled_messages.conversation_id
+      and (c.responsavel_id = auth.uid() or c.responsavel_id is null)
+  )
+);
+
+create policy "scheduled_messages_admin_gerente" on scheduled_messages
+for select using (
+  (select perfil from profiles where id = auth.uid()) in ('admin', 'gerente')
+);
+```
+
+- [ ] **Step 2: Typecheck e suíte completa (regressão)**
+
+Run: `npm run typecheck --workspace=apps/api && npm run typecheck --workspace=packages/db && npm test`
+Expected: sem erros novos, 48 testes continuam passando — este arquivo é só SQL, não afeta nenhum código TypeScript.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add supabase/migrations/20260714_inbox_rls.sql
+git commit -m "feat(db): enable RLS on inbox tables to enforce per-vendedor access at the database layer"
+```
+
+---
+
+### Task 9: CRM — alargar RLS de gerente em Funil/Clientes/Profiles
+
+**Repo:** `C:\Users\rgrasso\claude teste\meu-crm` (branch `main`)
+
+**Depends on:** nenhuma task de código (migration nova, independente). Adicionada porque as políticas de RLS já existentes em `migration-fase4.sql` (rodada antes deste projeto) restringem `gerente` a editar/excluir só os próprios negócios/clientes — mas a Task 3 alargou a checagem *no código* pra gerente gerenciar tudo (mesma decisão de "gerente vê e gerencia o time inteiro" do spec). Sem esse ajuste no banco, a tela mostraria a ação como permitida mas o RLS recusaria silenciosamente. De quebra, a política de leitura de `profiles` também só liberava a lista completa pra admin — sem isso, o dropdown de reatribuir conversa (Task 5) e o filtro de ranking em Relatórios voltam vazios pra gerente, mostrando só ele mesmo.
+
+**Files:**
+- Create: `migration-fase5.sql` (raiz do repo, mesmo padrão de `migration-fase4.sql` — rodado manualmente no SQL Editor do Supabase)
+
+**Interfaces:**
+- Não produz nem consome nada de outra task — ajusta políticas de RLS já existentes, criadas por `migration-fase4.sql` (não faz parte deste plano, já em produção).
+
+- [ ] **Step 1: Escrever a migration**
+
+Crie `migration-fase5.sql`:
+
+```sql
+-- ============================================================
+-- FASE 5: Alarga permissões de gerente (RLS) para bater com a
+-- decisão "gerente vê e gerencia o time inteiro, igual admin"
+-- (já aplicada no código em negocios/clientes) e corrige a leitura
+-- de profiles, que só liberava a lista completa pra admin — sem
+-- isso o dropdown de reatribuir conversa e o filtro de ranking em
+-- Relatórios voltam vazios pra gerente.
+-- Rodar no SQL Editor do Supabase, depois da fase 4.
+-- ============================================================
+
+-- ---- NEGOCIOS: gerente passa a editar/mover/excluir qualquer negócio ----
+drop policy if exists "negocios_gerente_update" on negocios;
+create policy "negocios_gerente_update" on negocios
+for update using (
+  (select perfil from profiles where id = auth.uid()) = 'gerente'
+);
+
+drop policy if exists "negocios_gerente_delete" on negocios;
+create policy "negocios_gerente_delete" on negocios
+for delete using (
+  (select perfil from profiles where id = auth.uid()) = 'gerente'
+);
+
+-- ---- CLIENTES: gerente passa a editar/excluir qualquer cliente ----
+drop policy if exists "clientes_gerente_update" on clientes;
+create policy "clientes_gerente_update" on clientes
+for update using (
+  (select perfil from profiles where id = auth.uid()) = 'gerente'
+);
+
+drop policy if exists "clientes_gerente_delete" on clientes;
+create policy "clientes_gerente_delete" on clientes
+for delete using (
+  (select perfil from profiles where id = auth.uid()) = 'gerente'
+);
+
+-- ---- PROFILES: gerente também precisa ler a lista completa de usuários
+-- (dropdown de reatribuir conversa, filtro de ranking em Relatórios) ----
+drop policy if exists "profiles_leitura" on profiles;
+create policy "profiles_leitura" on profiles
+for select using (
+  id = auth.uid()
+  or (select perfil from profiles where id = auth.uid()) in ('admin', 'gerente')
+);
+```
+
+(`negocios_gerente_insert`/`clientes_gerente_insert` ficam como estão — continuam exigindo `responsavel_id`/`user_id = auth.uid()`, mas isso já bate com o app: `criarNegocio`/`criarCliente` sempre gravam o criador como dono, nunca atribuem a outra pessoa na criação, então não há nenhum fluxo hoje que essa restrição bloqueie.)
+
+- [ ] **Step 2: Typecheck, lint e build (regressão)**
+
+Run: `npx tsc --noEmit && npm run lint && npm run build`
+Expected: mesmo baseline conhecido (1 erro pré-existente de tsc, 6 problemas de lint), sem novidade — este arquivo é só SQL, não afeta nenhum código TypeScript.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add migration-fase5.sql
+git commit -m "feat(db): widen gerente RLS on negocios/clientes and fix profiles read policy"
+```
