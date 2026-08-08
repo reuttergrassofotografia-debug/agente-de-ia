@@ -71,6 +71,7 @@ export interface Message {
   media_mimetype: string | null
   sender_phone: string | null
   sender_name: string | null
+  reply_to_message_id: string | null
   created_at: string
 }
 
@@ -88,6 +89,7 @@ export type MessageInsert = {
   content: string
   status?: MessageStatus
   evolution_message_id?: string
+  reply_to_message_id?: string
 }
 
 export type JobFailureInsert = {
@@ -155,7 +157,7 @@ export interface Database {
       }
       messages: {
         Row: { [K in keyof Message]: Message[K] }
-        Insert: { conversation_id: string; role: MessageRole; content: string; status?: MessageStatus; error?: string | null; evolution_message_id?: string | null; media_path?: string | null; media_mimetype?: string | null; sender_phone?: string | null; sender_name?: string | null }
+        Insert: { conversation_id: string; role: MessageRole; content: string; status?: MessageStatus; error?: string | null; evolution_message_id?: string | null; media_path?: string | null; media_mimetype?: string | null; sender_phone?: string | null; sender_name?: string | null; reply_to_message_id?: string | null }
         Update: Partial<Omit<Message, 'id' | 'created_at'>>
         Relationships: Relationship[]
       }

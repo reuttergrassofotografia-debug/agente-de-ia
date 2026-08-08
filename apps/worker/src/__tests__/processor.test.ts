@@ -8,7 +8,8 @@ import type { MessageJob } from '@agente/queue'
 const mockGetAgentByInstanceId = vi.fn()
 const mockGetConversation = vi.fn()
 const mockGetConversationMessages = vi.fn()
-const mockCreateMessage = vi.fn()
+const mockGetOrCreateAssistantReply = vi.fn()
+const mockCountAgentRepliesSince = vi.fn()
 const mockUpdateMessageStatus = vi.fn()
 const mockActivateConversationAgent = vi.fn()
 const mockRunAgent = vi.fn()
@@ -17,7 +18,8 @@ vi.mock('@agente/db', () => ({
   getAgentByInstanceId: (...args: unknown[]) => mockGetAgentByInstanceId(...args),
   getConversation: (...args: unknown[]) => mockGetConversation(...args),
   getConversationMessages: (...args: unknown[]) => mockGetConversationMessages(...args),
-  createMessage: (...args: unknown[]) => mockCreateMessage(...args),
+  getOrCreateAssistantReply: (...args: unknown[]) => mockGetOrCreateAssistantReply(...args),
+  countAgentRepliesSince: (...args: unknown[]) => mockCountAgentRepliesSince(...args),
   updateMessageStatus: (...args: unknown[]) => mockUpdateMessageStatus(...args),
   activateConversationAgent: (...args: unknown[]) => mockActivateConversationAgent(...args),
 }))
@@ -64,7 +66,11 @@ describe('processMessage', () => {
       status: 'active', last_message_at: null, agent_triggered: false, created_at: '',
     })
     mockGetConversationMessages.mockResolvedValue(MESSAGES)
-    mockCreateMessage.mockResolvedValue({ id: 'msg-reply-1' })
+    mockGetOrCreateAssistantReply.mockImplementation(async (_db, { content }) => ({
+      message: { id: 'msg-reply-1', status: 'pending', content },
+      isNew: true,
+    }))
+    mockCountAgentRepliesSince.mockResolvedValue(0)
     mockUpdateMessageStatus.mockResolvedValue(undefined)
     mockRunAgent.mockResolvedValue({ text: 'Olá! Como posso ajudar?' })
   })
@@ -110,12 +116,72 @@ describe('processMessage', () => {
         userMessage: 'Oi de novo',
       }),
     )
-    expect(mockCreateMessage).toHaveBeenCalledWith(
+    expect(mockGetOrCreateAssistantReply).toHaveBeenCalledWith(
       mockDb,
-      expect.objectContaining({ conversation_id: 'conv-1', role: 'assistant', content: 'Olá! Como posso ajudar?', status: 'delivered' }),
+      expect.objectContaining({ conversation_id: 'conv-1', content: 'Olá! Como posso ajudar?', reply_to_message_id: 'msg-1' }),
     )
     expect(mockEvolution.sendText).toHaveBeenCalledWith('test-instance', '5511999999999', 'Olá! Como posso ajudar?')
-    expect(mockUpdateMessageStatus).toHaveBeenNthCalledWith(2, mockDb, 'msg-1', 'delivered')
+    expect(mockUpdateMessageStatus).toHaveBeenNthCalledWith(2, mockDb, 'msg-reply-1', 'delivered')
+    expect(mockUpdateMessageStatus).toHaveBeenNthCalledWith(3, mockDb, 'msg-1', 'delivered')
+  })
+
+  it('does not resend when retrying a job whose reply was already delivered', async () => {
+    mockGetOrCreateAssistantReply.mockResolvedValue({
+      message: { id: 'msg-reply-1', status: 'delivered', content: 'Olá! Como posso ajudar?' },
+      isNew: false,
+    })
+    const { processMessage } = await import('../processor.js')
+    await processMessage(makeJob(), { db: mockDb, evolution: mockEvolution as unknown as EvolutionClient })
+
+    expect(mockEvolution.sendText).not.toHaveBeenCalled()
+    expect(mockUpdateMessageStatus).toHaveBeenCalledWith(mockDb, 'msg-1', 'delivered')
+  })
+
+  it('resends when retrying a job whose reply row exists but was never delivered', async () => {
+    mockGetOrCreateAssistantReply.mockResolvedValue({
+      message: { id: 'msg-reply-1', status: 'pending', content: 'Olá! Como posso ajudar?' },
+      isNew: false,
+    })
+    const { processMessage } = await import('../processor.js')
+    await processMessage(makeJob(), { db: mockDb, evolution: mockEvolution as unknown as EvolutionClient })
+
+    expect(mockEvolution.sendText).toHaveBeenCalledWith('test-instance', '5511999999999', 'Olá! Como posso ajudar?')
+    expect(mockUpdateMessageStatus).toHaveBeenCalledWith(mockDb, 'msg-reply-1', 'delivered')
+  })
+
+  it('skips without replying once the daily message limit is reached', async () => {
+    mockGetAgentByInstanceId.mockResolvedValue({ ...AGENT, daily_message_limit: 3 })
+    mockCountAgentRepliesSince.mockResolvedValue(3)
+    const { processMessage } = await import('../processor.js')
+    await processMessage(makeJob(), { db: mockDb, evolution: mockEvolution as unknown as EvolutionClient })
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(mockEvolution.sendText).not.toHaveBeenCalled()
+    expect(mockUpdateMessageStatus).toHaveBeenCalledWith(mockDb, 'msg-1', 'skipped')
+  })
+
+  it('replies normally while under the daily message limit', async () => {
+    mockGetAgentByInstanceId.mockResolvedValue({ ...AGENT, daily_message_limit: 3 })
+    mockCountAgentRepliesSince.mockResolvedValue(2)
+    const { processMessage } = await import('../processor.js')
+    await processMessage(makeJob(), { db: mockDb, evolution: mockEvolution as unknown as EvolutionClient })
+
+    expect(mockEvolution.sendText).toHaveBeenCalledWith('test-instance', '5511999999999', 'Olá! Como posso ajudar?')
+  })
+
+  it('waits typing_delay_ms before sending the reply', async () => {
+    mockGetAgentByInstanceId.mockResolvedValue({ ...AGENT, typing_delay_ms: 500 })
+    vi.useFakeTimers()
+    const { processMessage } = await import('../processor.js')
+    const done = processMessage(makeJob(), { db: mockDb, evolution: mockEvolution as unknown as EvolutionClient })
+
+    await vi.advanceTimersByTimeAsync(499)
+    expect(mockEvolution.sendText).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await done
+
+    expect(mockEvolution.sendText).toHaveBeenCalledWith('test-instance', '5511999999999', 'Olá! Como posso ajudar?')
+    vi.useRealTimers()
   })
 
   it('filters tool messages out of history', async () => {

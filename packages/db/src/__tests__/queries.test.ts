@@ -67,7 +67,9 @@ describe('createMessage', () => {
     const { createMessage } = await import('../queries/messages.js')
     const created: Message = {
       id: 'msg-1', conversation_id: 'conv-1', role: 'user', content: 'Hello',
-      status: 'pending', error: null, evolution_message_id: 'ev-1', created_at: '2026-01-01T00:00:00Z',
+      status: 'pending', error: null, evolution_message_id: 'ev-1',
+      media_path: null, media_mimetype: null, sender_phone: null, sender_name: null,
+      reply_to_message_id: null, created_at: '2026-01-01T00:00:00Z',
     }
     const chain = {
       insert: vi.fn().mockReturnThis(),
@@ -78,6 +80,97 @@ describe('createMessage', () => {
       conversation_id: 'conv-1', role: 'user', content: 'Hello', evolution_message_id: 'ev-1',
     })
     expect(result).toEqual(created)
+  })
+})
+
+describe('getOrCreateAssistantReply', () => {
+  it('returns the inserted row and isNew=true on first attempt', async () => {
+    const { getOrCreateAssistantReply } = await import('../queries/messages.js')
+    const created: Message = {
+      id: 'reply-1', conversation_id: 'conv-1', role: 'assistant', content: 'Oi!',
+      status: 'pending', error: null, evolution_message_id: null,
+      media_path: null, media_mimetype: null, sender_phone: null, sender_name: null,
+      reply_to_message_id: 'msg-1', created_at: '2026-01-01T00:00:00Z',
+    }
+    const chain = {
+      upsert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: created, error: null }),
+    }
+    const result = await getOrCreateAssistantReply(makeDb(chain), {
+      conversation_id: 'conv-1', content: 'Oi!', reply_to_message_id: 'msg-1',
+    })
+    expect(result).toEqual({ message: created, isNew: true })
+    expect(chain.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ reply_to_message_id: 'msg-1', role: 'assistant' }),
+      { onConflict: 'reply_to_message_id', ignoreDuplicates: true },
+    )
+  })
+
+  it('refetches and returns isNew=false when a retry hits the unique index', async () => {
+    const { getOrCreateAssistantReply } = await import('../queries/messages.js')
+    const existing: Message = {
+      id: 'reply-1', conversation_id: 'conv-1', role: 'assistant', content: 'Oi!',
+      status: 'delivered', error: null, evolution_message_id: null,
+      media_path: null, media_mimetype: null, sender_phone: null, sender_name: null,
+      reply_to_message_id: 'msg-1', created_at: '2026-01-01T00:00:00Z',
+    }
+    let call = 0
+    const chain = {
+      upsert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn(() => {
+        call += 1
+        return Promise.resolve(call === 1 ? { data: null, error: null } : { data: existing, error: null })
+      }),
+    }
+    const result = await getOrCreateAssistantReply(makeDb(chain), {
+      conversation_id: 'conv-1', content: 'Oi!', reply_to_message_id: 'msg-1',
+    })
+    expect(result).toEqual({ message: existing, isNew: false })
+  })
+})
+
+describe('countAgentRepliesSince', () => {
+  it('counts assistant messages across the agent\'s conversations since the given instant', async () => {
+    const { countAgentRepliesSince } = await import('../queries/messages.js')
+    const conversationsChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ data: [{ id: 'conv-1' }, { id: 'conv-2' }], error: null }),
+    }
+    const messagesChain = {
+      select: vi.fn().mockReturnThis(),
+      in: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockResolvedValue({ count: 5, error: null }),
+    }
+    const from = vi.fn((table: string) => (table === 'conversations' ? conversationsChain : messagesChain))
+    const db = { from } as unknown as SupabaseClient<Database>
+
+    const result = await countAgentRepliesSince(db, 'agent-1', '2026-01-01T00:00:00.000Z')
+
+    expect(result).toBe(5)
+    expect(conversationsChain.eq).toHaveBeenCalledWith('agent_id', 'agent-1')
+    expect(messagesChain.in).toHaveBeenCalledWith('conversation_id', ['conv-1', 'conv-2'])
+    expect(messagesChain.eq).toHaveBeenCalledWith('role', 'assistant')
+    expect(messagesChain.gte).toHaveBeenCalledWith('created_at', '2026-01-01T00:00:00.000Z')
+  })
+
+  it('returns 0 without querying messages when the agent has no conversations', async () => {
+    const { countAgentRepliesSince } = await import('../queries/messages.js')
+    const conversationsChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ data: [], error: null }),
+    }
+    const messagesChain = { select: vi.fn() }
+    const from = vi.fn((table: string) => (table === 'conversations' ? conversationsChain : messagesChain))
+    const db = { from } as unknown as SupabaseClient<Database>
+
+    const result = await countAgentRepliesSince(db, 'agent-1', '2026-01-01T00:00:00.000Z')
+
+    expect(result).toBe(0)
+    expect(messagesChain.select).not.toHaveBeenCalled()
   })
 })
 
