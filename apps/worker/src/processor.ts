@@ -5,14 +5,15 @@ import {
   getAgentByInstanceId,
   getConversation,
   getConversationMessages,
-  createMessage,
+  getOrCreateAssistantReply,
+  countAgentRepliesSince,
   updateMessageStatus,
   activateConversationAgent,
   type Database,
 } from '@agente/db'
 import { runAgent } from '@agente/llm'
 import type { MessageJob } from '@agente/queue'
-import { isWithinBusinessHours } from './businessHours.js'
+import { isWithinBusinessHours, startOfBusinessDay } from './businessHours.js'
 
 interface ProcessorDeps {
   db: SupabaseClient<Database>
@@ -22,6 +23,8 @@ interface ProcessorDeps {
 function stripAccents(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 }
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 export async function processMessage(job: Job<MessageJob>, { db, evolution }: ProcessorDeps): Promise<void> {
   const { instanceId, messageId, conversationId, evolutionInstanceName, contactPhone, conversationTriggered } = job.data
@@ -45,6 +48,14 @@ export async function processMessage(job: Job<MessageJob>, { db, evolution }: Pr
     }
     await updateMessageStatus(db, messageId, 'skipped')
     return
+  }
+
+  if (agent.daily_message_limit !== null) {
+    const sentToday = await countAgentRepliesSince(db, agent.id, startOfBusinessDay().toISOString())
+    if (sentToday >= agent.daily_message_limit) {
+      await updateMessageStatus(db, messageId, 'skipped')
+      return
+    }
   }
 
   // Trigger phrase check: skip until trigger is detected (accent-insensitive)
@@ -72,14 +83,19 @@ export async function processMessage(job: Job<MessageJob>, { db, evolution }: Pr
 
   const { text } = await runAgent({ agentConfig: agent, history, userMessage })
 
-  await createMessage(db, {
+  // reply_to_message_id has a unique index, so a retry of this job reuses the reply row (and
+  // its already-sent status) from any prior attempt instead of generating and sending a new one.
+  const { message: reply, isNew } = await getOrCreateAssistantReply(db, {
     conversation_id: conversationId,
-    role: 'assistant',
     content: text,
-    status: 'delivered',
+    reply_to_message_id: messageId,
   })
 
-  await evolution.sendText(evolutionInstanceName, contactPhone, text)
+  if (isNew || reply.status !== 'delivered') {
+    if (agent.typing_delay_ms > 0) await sleep(agent.typing_delay_ms)
+    await evolution.sendText(evolutionInstanceName, contactPhone, reply.content)
+    await updateMessageStatus(db, reply.id, 'delivered')
+  }
 
   await updateMessageStatus(db, messageId, 'delivered')
 }
